@@ -71,6 +71,7 @@ def run_vllm(
     dtype: str,
     max_model_len: Optional[int],
     enforce_eager: bool,
+    with_ort: bool = False
 ) -> float:
     from vllm import LLM, SamplingParams
     llm = LLM(
@@ -81,6 +82,7 @@ def run_vllm(
         seed=seed,
         trust_remote_code=trust_remote_code,
         dtype=dtype,
+        backend="ort" if with_ort else "torch",
         max_model_len=max_model_len,
         enforce_eager=enforce_eager,
     )
@@ -205,8 +207,8 @@ def main(args: argparse.Namespace):
         elapsed_time = run_vllm(requests, args.model, args.tokenizer,
                                 args.quantization, args.tensor_parallel_size,
                                 args.seed, args.n, args.use_beam_search,
-                                args.trust_remote_code, args.dtype,
-                                args.max_model_len, args.enforce_eager)
+                                args.trust_remote_code, args.dtype, args.max_model_len, 
+                                args.enforce_eager, args.with_ort)
     elif args.backend == "hf":
         assert args.tensor_parallel_size == 1
         elapsed_time = run_hf(requests, args.model, tokenizer, args.n,
@@ -284,6 +286,9 @@ if __name__ == "__main__":
     parser.add_argument("--enforce-eager",
                         action="store_true",
                         help="enforce eager execution")
+    parser.add_argument('--with-ort',
+                        action='store_true',
+                        help='use ORT for inference when vLLM backend is selected')
     args = parser.parse_args()
     if args.tokenizer is None:
         args.tokenizer = args.model

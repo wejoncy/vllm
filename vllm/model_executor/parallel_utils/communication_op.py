@@ -7,6 +7,20 @@ from vllm.model_executor.parallel_utils.parallel_state import (
 )
 
 
+class AllReduce(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_) -> torch.Tensor:
+        if torch.onnx.is_in_onnx_export():
+            return input_
+        # All-reduce.
+        torch.distributed.all_reduce(input_,
+                                    group=get_tensor_model_parallel_group())
+        return input_
+
+    @staticmethod
+    def symbolic(g: torch.Graph, x) -> torch.Value:
+        return g.op('com.microsoft::AllReduce', x)
+
 def tensor_model_parallel_all_reduce(input_):
     """All-reduce the input tensor across model parallel group.
 
@@ -15,10 +29,7 @@ def tensor_model_parallel_all_reduce(input_):
     # Bypass the function if we are using only 1 GPU.
     if get_tensor_model_parallel_world_size() == 1:
         return input_
-    # All-reduce.
-    torch.distributed.all_reduce(input_,
-                                 group=get_tensor_model_parallel_group())
-    return input_
+    return AllReduce.apply(input_)
 
 
 def tensor_model_parallel_all_gather(input_, dim=-1):

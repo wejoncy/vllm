@@ -14,6 +14,20 @@ from vllm.model_executor.parallel_utils.utils import divide
 from vllm.model_executor.utils import set_weight_attrs
 
 
+from .layernorm import ONNX_EXPORT_LEVEL
+class ONNXSiluAndMul(torch.autograd.Function):
+    """Split the input and keep only the corresponding chuck to the rank."""
+
+    @staticmethod
+    def symbolic(graph, input_):
+        return graph.op("vllm.ort.ext::TorchExtension", input_, outputs=1,
+                        num_inputs_i=1, num_outputs_i=1, func_name_s="silu_and_mul", output_shape_s="1,0.5")
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        return x[..., :x.shape[-1] // 2]
+
+
 class SiluAndMul(nn.Module):
     """An activation function for SwiGLU.
 
@@ -30,6 +44,12 @@ class SiluAndMul(nn.Module):
         return F.silu(x[..., :d]) * x[..., d:]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if torch.onnx.is_in_onnx_export():
+            if ONNX_EXPORT_LEVEL == 1:
+                x1, x2 = x.chunk(chunks=2, dim=-1)
+                return x1*torch.sigmoid(x1) * x2
+            else:
+                return ONNXSiluAndMul().apply(x)
         d = x.shape[-1] // 2
         output_shape = (x.shape[:-1] + (d, ))
         out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
