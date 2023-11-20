@@ -1,6 +1,7 @@
 """Utilities for selecting and loading models."""
 import contextlib
 from typing import Type
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from vllm.config import ModelConfig
 from vllm.model_executor.models import ModelRegistry
 from vllm.model_executor.weight_utils import (get_quant_config,
                                               initialize_dummy_weights)
+from vllm.model_executor.ort_backend.ort_backend import ORTBackend
 
 
 @contextlib.contextmanager
@@ -62,7 +64,15 @@ def get_model(model_config: ModelConfig) -> nn.Module:
         # Create a model instance.
         # The weights will be initialized as empty tensors.
         with torch.device("cuda"):
-            model = model_class(model_config.hf_config, linear_method)
+            model_create_func = partial(model_class, model_config.hf_config,
+                                            linear_method)
+
+            if model_config.backend == "torch":
+                model = model_create_func()
+            elif model_config.backend == "ort":
+                model = ORTBackend(model_create_func, model_config.hf_config, linear_method)
+            else:
+                raise ValueError(f"Unsupported backend: {model_config.backend}")
         if model_config.load_format == "dummy":
             # NOTE(woosuk): For accurate performance evaluation, we assign
             # random values to the weights.
