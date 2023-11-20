@@ -38,6 +38,8 @@ void rms_norm(
   float epsilon);
 
 void fused_add_rms_norm(
+  c10::optional<torch::Tensor>& out_input,      // [..., hidden_size]
+  c10::optional<torch::Tensor>& out_residual,      // [..., hidden_size]
   torch::Tensor& input,
   torch::Tensor& residual,
   torch::Tensor& weight,

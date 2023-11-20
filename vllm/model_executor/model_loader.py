@@ -1,6 +1,7 @@
 """Utilities for selecting and loading models."""
 import contextlib
 from typing import Optional, Type
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from vllm.config import ModelConfig, LoRAConfig
 from vllm.model_executor.models import ModelRegistry
 from vllm.model_executor.weight_utils import (get_quant_config,
                                               initialize_dummy_weights)
+from vllm.model_executor.ort_backend.ort_backend import ORTBackend
 
 
 @contextlib.contextmanager
@@ -64,8 +66,8 @@ def get_model(model_config: ModelConfig,
         # The weights will be initialized as empty tensors.
         with torch.device("cuda"):
             if getattr(model_class, "supports_lora", False):
-                model = model_class(model_config.hf_config, linear_method,
-                                    lora_config)
+                model_create_func = partial(
+                    model_class, model_config.hf_config, linear_method, lora_config)
             elif lora_config:
                 raise ValueError(
                     f"Model {model_class.__name__} does not support LoRA, "
@@ -73,7 +75,13 @@ def get_model(model_config: ModelConfig,
                     "be added in the future. If this is important to you, "
                     "please open an issue on github.")
             else:
-                model = model_class(model_config.hf_config, linear_method)
+                model_create_func = partial(model_class, model_config.hf_config, linear_method)
+            if model_config.backend == "torch":
+                model = model_create_func()
+            elif model_config.backend == "ort":
+                model = ORTBackend(model_create_func, model_config.hf_config, linear_method)
+            else:
+                raise ValueError(f"Unsupported backend: {model_config.backend}")
         if model_config.load_format == "dummy":
             # NOTE(woosuk): For accurate performance evaluation, we assign
             # random values to the weights.

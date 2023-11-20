@@ -41,6 +41,7 @@ class EngineArgs:
     lora_extra_vocab_size: int = 256
     lora_dtype = 'auto'
     max_cpu_loras: Optional[int] = None
+    backend: str = "torch"
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -241,6 +242,11 @@ class EngineArgs:
             help=('Maximum number of LoRAs to store in CPU memory. '
                   'Must be >= than max_num_seqs. '
                   'Defaults to max_num_seqs.'))
+        parser.add_argument('--backend',
+                            type=str,
+                            default=EngineArgs.backend,
+                            choices=["torch", "ort"],
+                            help='the accerlated backend to use. ')
         return parser
 
     @classmethod
@@ -261,7 +267,7 @@ class EngineArgs:
                                    self.dtype, self.seed, self.revision,
                                    self.tokenizer_revision, self.max_model_len,
                                    self.quantization, self.enforce_eager,
-                                   self.max_context_len_to_capture)
+                                   self.max_context_len_to_capture, self.backend)
         cache_config = CacheConfig(self.block_size,
                                    self.gpu_memory_utilization,
                                    self.swap_space,
