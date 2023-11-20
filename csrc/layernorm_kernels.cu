@@ -37,6 +37,8 @@ __global__ void rms_norm_kernel(
 // TODO: Further optimize this kernel.
 template<typename scalar_t>
 __global__ void fused_add_rms_norm_kernel(
+  scalar_t* __restrict__ out_input,           // [..., hidden_size]
+  scalar_t* __restrict__ out_residual,        // [..., hidden_size]
   scalar_t* __restrict__ input,           // [..., hidden_size]
   scalar_t* __restrict__ residual,        // [..., hidden_size]
   const scalar_t* __restrict__ weight,    // [hidden_size]
@@ -50,7 +52,7 @@ __global__ void fused_add_rms_norm_kernel(
     float x = (float) input[blockIdx.x * hidden_size + idx];
     x += (float) residual[blockIdx.x * hidden_size + idx];
     variance += x * x;
-    residual[blockIdx.x * hidden_size + idx] = (scalar_t) x;
+    out_residual[blockIdx.x * hidden_size + idx] = (scalar_t) x;
   }
   variance = blockReduceSum<float>(variance);
   if (threadIdx.x == 0) {
@@ -59,8 +61,8 @@ __global__ void fused_add_rms_norm_kernel(
   __syncthreads();
 
   for (int idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
-    float x = (float) residual[blockIdx.x * hidden_size + idx];
-    input[blockIdx.x * hidden_size + idx] = ((scalar_t) (x * s_variance)) * weight[idx];
+    float x = (float) out_residual[blockIdx.x * hidden_size + idx];
+    out_input[blockIdx.x * hidden_size + idx] = ((scalar_t) (x * s_variance)) * weight[idx];
   }
 }
 
@@ -92,10 +94,18 @@ void rms_norm(
 }
 
 void fused_add_rms_norm(
+  c10::optional<torch::Tensor>& out_input,      // [..., hidden_size]
+  c10::optional<torch::Tensor>& out_residual,      // [..., hidden_size]
   torch::Tensor& input,    // [..., hidden_size]
   torch::Tensor& residual, // [..., hidden_size]
   torch::Tensor& weight,   // [hidden_size]
   float epsilon) {
+    if (!out_input.has_value()) {
+      out_input = input;
+    }
+    if (!out_residual.has_value()) {
+      out_residual = residual;
+    }
   int hidden_size = input.size(-1);
   int num_tokens = input.numel() / hidden_size;
 
@@ -107,6 +117,8 @@ void fused_add_rms_norm(
     "fused_add_rms_norm_kernel",
     [&] {
       vllm::fused_add_rms_norm_kernel<scalar_t><<<grid, block, 0, stream>>>(
+        out_input.value().data_ptr<scalar_t>(),
+        out_residual.value().data_ptr<scalar_t>(),
         input.data_ptr<scalar_t>(),
         residual.data_ptr<scalar_t>(),
         weight.data_ptr<scalar_t>(),

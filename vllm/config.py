@@ -73,6 +73,7 @@ class ModelConfig:
         quantization: Optional[str] = None,
         enforce_eager: bool = False,
         max_context_len_to_capture: Optional[int] = None,
+        backend = "torch",
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -102,6 +103,9 @@ class ModelConfig:
         self.dtype = _get_and_verify_dtype(self.hf_config, dtype)
         self.max_model_len = _get_and_verify_max_len(self.hf_config,
                                                      max_model_len)
+        self.backend = backend
+        self.hf_config.backend = backend
+
         self._verify_load_format()
         self._verify_tokenizer_mode()
         self._verify_quantization()

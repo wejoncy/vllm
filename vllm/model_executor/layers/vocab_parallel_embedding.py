@@ -85,18 +85,17 @@ class VocabParallelEmbedding(torch.nn.Module):
     def forward(self, input_):
         if self.tp_size > 1:
             # Build the mask.
-            input_mask = ((input_ < self.vocab_start_index) |
-                          (input_ >= self.vocab_end_index))
+            input_mask = (input_ >= self.vocab_start_index) & (input_ < self.vocab_end_index)
             # Mask the input.
             masked_input = input_.clone() - self.vocab_start_index
-            masked_input[input_mask] = 0
+            masked_input = masked_input*input_mask
         else:
             masked_input = input_
             # Get the embeddings.
         output_parallel = F.embedding(masked_input, self.weight)
         # Mask the output embedding.
         if self.tp_size > 1:
-            output_parallel[input_mask, :] = 0.0
+            output_parallel = output_parallel*(input_mask.unsqueeze(-1))
         # Reduce across all the model parallel GPUs.
         output = tensor_model_parallel_all_reduce(output_parallel)
         return output
