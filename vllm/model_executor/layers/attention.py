@@ -19,6 +19,34 @@ _SUPPORTED_HEAD_SIZES = [64, 80, 96, 112, 128, 256]
 _PARTITION_SIZE = 512
 
 
+class OnnxPagedAttention(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,
+                num_heads, num_kv_heads, head_size, scale,
+                query: torch.Tensor,                    # [num_tokens, num_heads * head_size]
+                key: torch.Tensor,                      # [num_tokens, num_heads * head_size]
+                value: torch.Tensor,                    # [num_tokens, num_heads * head_size]
+                key_cache: Optional[torch.Tensor],      # [num_blocks, num_heads, head_size/x, block_size, x]
+                value_cache: Optional[torch.Tensor],    # [num_blocks, num_heads, head_size, block_size]
+                # [num_blocks, 2, num_heads, head_size//quant_block_size, block_size]
+                input_metadata: InputMetadata) -> torch.Tensor:
+        return query
+
+    @staticmethod
+    def symbolic(g: torch.Graph, num_heads, num_kv_heads, head_size, scale,
+                 query,
+                 key,
+                 value,
+                 key_cache,
+                 value_cache,
+                 input_metadata) -> torch.Value:
+        return g.op("vllm.ort.ext::PagedAttention",
+                    query, key, value,
+                    key_cache, value_cache,input_metadata,
+                    outputs=1,
+                    num_heads_i=num_heads, num_kv_heads_i=num_kv_heads, head_size_i=head_size, scale_f=scale)
+
+
 class PagedAttention(nn.Module):
     """MHA/MQA/GQA layer with PagedAttention.
 
@@ -81,6 +109,12 @@ class PagedAttention(nn.Module):
         Returns:
             shape = [batch_size, seq_len, num_heads * head_size]
         """
+        if torch.onnx.is_in_onnx_export():
+            return OnnxPagedAttention().apply(self.num_heads, self.num_kv_heads,
+                                              self.head_size, self.scale,
+                                              query, key, value,
+                                              key_cache, value_cache,
+                                              input_metadata)
         batch_size, seq_len, hidden_size = query.shape
         # Reshape the query, key, and value tensors.
         query = query.view(-1, self.num_heads, self.head_size)

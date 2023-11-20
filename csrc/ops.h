@@ -38,6 +38,8 @@ void rms_norm(
   float epsilon);
 
 void fused_add_rms_norm(
+  c10::optional<torch::Tensor>& out_input,      // [..., hidden_size]
+  c10::optional<torch::Tensor>& out_residual,      // [..., hidden_size]
   torch::Tensor& input,
   torch::Tensor& residual,
   torch::Tensor& weight,
@@ -49,7 +51,9 @@ void rotary_embedding(
   torch::Tensor& key,
   int head_size,
   torch::Tensor& cos_sin_cache,
-  bool is_neox);
+  bool is_neox,
+  c10::optional<torch::Tensor>& out_query,
+  c10::optional<torch::Tensor>& out_key);
 
 void silu_and_mul(
   torch::Tensor& out,

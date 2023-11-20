@@ -1,4 +1,5 @@
 import contextlib
+from xformers import _C_flashattention
 import io
 import os
 import re
@@ -12,7 +13,6 @@ import setuptools
 import torch
 import torch.utils.cpp_extension as torch_cpp_ext
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
-
 ROOT_DIR = os.path.dirname(__file__)
 
 MAIN_CUDA_VERSION = "12.1"
@@ -306,6 +306,35 @@ vllm_extension_sources = [
 if _is_cuda():
     vllm_extension_sources.append("csrc/quantization/awq/gemm_kernels.cu")
 
+def download_onnxruntime_headers(version="1.16.3"):
+    from pathlib import Path
+    import urllib
+    import tarfile
+    url = f"https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-linux-x64-gpu-{version}.tgz"
+    fname = Path(f"build/onnxruntime-headers-{version}.tgz").resolve()
+    if not Path(str(fname)[:-4]).exists():
+        if not fname.exists():
+            fname.parent.mkdir(exist_ok=True)
+            print("downloading onnxruntime c++ headers from ", url)
+            urllib.request.urlretrieve(url, fname)
+        with tarfile.open(fname) as tar:
+            tar.extractall(path=fname._str[:-4])
+    return os.path.join(fname._str[:-4], os.listdir(fname._str[:-4])[0], 'include')
+
+
+_build_ort_backend = True
+extra_link_args = []
+include_dirs = []
+if _build_ort_backend:
+    import glob
+    import shutil
+    shutil.copy2(_C_flashattention.__file__, "./")
+    vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
+    base_dir, base_name = os.path.split(_C_flashattention.__file__)
+    extra_link_args.extend(
+        [base_name, "-Wl,-rpath=$ORIGIN/../../xformers:$ORIGIN/../:$ORIGIN/../xformers"])
+    include_dirs.append(download_onnxruntime_headers())
+
 if not _is_neuron():
     vllm_extension = CUDAExtension(
         name="vllm._C",
@@ -314,6 +343,8 @@ if not _is_neuron():
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
         },
+        extra_link_args=extra_link_args,
+        include_dirs=include_dirs,
     )
     ext_modules.append(vllm_extension)
 
