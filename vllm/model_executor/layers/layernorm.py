@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from vllm._C import ops
 
-ONNX_EXPORT_LEVEL = 3
+ONNX_EXPORT_LEVEL = 2
 class ONNXExtentions(torch.autograd.Function):
     @staticmethod
     def symbolic(graph, x, weight, variance_epsilon, residual):
@@ -33,7 +33,7 @@ def rms_for_onnx_export(x: torch.Tensor, weight, variance_epsilon, residual: Opt
                 ) -> torch.Tensor:
     if ONNX_EXPORT_LEVEL == 2:
         if residual is not None:
-            x += residual
+            x =x+ residual
             xresidual = x
         rms = ONNXExtentions.apply(x, weight.data, variance_epsilon, None)
     elif ONNX_EXPORT_LEVEL == 3:

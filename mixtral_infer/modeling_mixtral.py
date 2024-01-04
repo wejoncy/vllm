@@ -715,6 +715,9 @@ class MixtralModel(nn.Module):
             position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
         else:
             position_ids = position_ids.view(-1, seq_length).long()
+        
+        if seqlens_k is None and attention_mask is not None:
+            seqlens_k = attention_mask.sum(dim=-1)
         attention_mask = _prepare_4d_causal_attention_mask(
             attention_mask,
             (batch_size, seq_length),

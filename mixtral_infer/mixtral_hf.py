@@ -82,6 +82,7 @@ def export_onnx_no_tp(model: torch.nn.Module, onnx_path_str: str, sample_inputs:
     return onnx_path_one_for_all
 
 def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
+    opset=16
     torch.set_default_dtype(torch.float16)
     config = transformers.AutoConfig.from_pretrained(
         model_name, trust_remote_code=True)
@@ -95,11 +96,11 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
     if tensor_parallel_size == 1:
         return export_onnx_no_tp(model, f"{onnx_path}/onnx_models_int4",inputs,True)
     model.to("cuda")
-    out, past_key_values = model(**inputs)
-    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask,None, None, None)
-    tmp_onnx = Path(f"{onnx_path}/tmp{rank}/mixtral_rank{rank}.onnx")
-    tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
-    tmp_onnx.parent.mkdir(exist_ok=True)
+    out, past_key_values = model(**inputs).values()
+    #onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask, None, None, None)
+    #tmp_onnx = Path(f"{onnx_path}/tmp{rank}/mixtral_rank{rank}.onnx")
+    #tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
+    #tmp_onnx.parent.mkdir(exist_ok=True)
     onnx_model_path = Path(f"{onnx_path}/onnx_models/mixtral_rank{rank}.onnx").absolute()
     onnx_model_path.parent.mkdir(exist_ok=True)
     onnx_model_path.exists() and onnx_model_path.unlink()
@@ -117,14 +118,14 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
     #                      0: "batch_size", 1: "seq_len"}},
     #                  autograd_inlining=False)
     #torch.distributed.barrier(group=get_tensor_model_parallel_group())
-    import onnx
-    onnx_model = onnx.load(str(tmp_onnx))
-    onnx.save_model(onnx_model, str(onnx_model_path), save_as_external_data=True, all_tensors_to_one_file=True,
-                    location=tmp_onnx.with_suffix('.data').name, size_threshold=1024, convert_attribute=False)
-    
+    #import onnx
+    #onnx_model = onnx.load(str(tmp_onnx))
+    #onnx.save_model(onnx_model, str(onnx_model_path), save_as_external_data=True, all_tensors_to_one_file=True,
+    #                location=tmp_onnx.with_suffix('.data').name, size_threshold=1024, convert_attribute=False)
+    #
     # export with_past
-    seqlens_k = torch.tensor([inputs.input_ids.shape[0]]).cuda()
-    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask, seqlens_k, None, past_key_values)
+    seqlens_k = torch.tensor([inputs.input_ids.shape[1]]).cuda()
+    onnx_pt_inputs = (inputs.input_ids[:,1:2], None, seqlens_k, None, past_key_values)
     tmp_onnx = Path(f"{onnx_path}/tmp{rank}/mixtral_with_past_rank{rank}.onnx")
     tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
     tmp_onnx.parent.mkdir(exist_ok=True)
@@ -133,7 +134,7 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
     onnx_pastmodel_path.exists() and onnx_pastmodel_path.unlink()
     (onnx_pastmodel_path.parent/onnx_pastmodel_path.with_suffix('.data').name).exists() and (
         onnx_pastmodel_path.parent/onnx_pastmodel_path.with_suffix('.data').name).unlink()
-    onnx_inp_names = ("input_ids", "attention_mask", "seqlens_k")
+    onnx_inp_names = ("input_ids", "seqlens_k")
     for layer_idx in range(model.config.num_hidden_layers):
         onnx_inp_names = onnx_inp_names + \
             (f"present_key.{layer_idx}", f"present_values.{layer_idx}")
@@ -143,7 +144,7 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
             0: "batch_size", 2: "seq_len", 1: "num_heads", 3: "head_dim"}
         dynamic_axes[f"present_values.{layer_idx}"] = {
             0: "batch_size", 2: "seq_len", 1: "num_heads", 3: "head_dim"}
-    torch.onnx.export(model=model, args=tuple(onnx_pt_inputs), f=str(tmp_onnx), verbose=False, opset_version=17,
+    torch.onnx.export(model=model, args=tuple(onnx_pt_inputs), f=str(tmp_onnx), verbose=False, opset_version=opset,
                       input_names=tuple(onnx_inp_names), output_names=tuple(onnx_out_names),
                       dynamic_axes=dynamic_axes,
                       autograd_inlining=False)
@@ -164,6 +165,7 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
         model_name, trust_remote_code=True)
     inputs = tokenizer("once upon a time ", return_tensors="pt").to("cuda")
 
+    kv_num_heads = 8//tensor_parallel_size
     if not isinstance(model_or_sess, nn.Module):
         #attention_mask = inputs.attention_mask.cpu().numpy()
         seq_len = inputs.input_ids.shape[1]
@@ -171,8 +173,8 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
         onnx_inputs = {"input_ids": inputs.input_ids.cpu().numpy()}
         onnx_inputs["seqlens_k"] = np.array([seq_len + 1] * batch_size) # hack
         for layer_idx in range(config.num_hidden_layers):
-            onnx_inputs[f"present_key.{layer_idx}"] = np.zeros([batch_size, 8, 0, 128]).astype(np.float16)
-            onnx_inputs[f"present_values.{layer_idx}"] = np.zeros([batch_size, 8, 0, 128]).astype(np.float16)
+            onnx_inputs[f"present_key.{layer_idx}"] = np.zeros([batch_size, kv_num_heads, 0, 128]).astype(np.float16)
+            onnx_inputs[f"present_values.{layer_idx}"] = np.zeros([batch_size, kv_num_heads, 0, 128]).astype(np.float16)
         ortout = model_or_sess.run(None, onnx_inputs)
         out = torch.from_numpy(ortout[0]).cuda()
     else:
@@ -222,9 +224,9 @@ def test_infer_model(model_name, tensor_parallel_size, rank, onnx_path, backend=
     else:
         onnx_model_path = Path(onnx_path).absolute()
         import onnxruntime
-        from vllm import paged_attn
+        #from vllm import paged_attn
         session_options = onnxruntime.SessionOptions()
-        session_options.register_custom_ops_library(paged_attn.__file__)
+        #session_options.register_custom_ops_library(paged_attn.__file__)
         provider_opt = {"device_id": rank, }
         sess = onnxruntime.InferenceSession(str(onnx_model_path), providers=[(
             "CUDAExecutionProvider", provider_opt)], sess_options=session_options)
@@ -270,7 +272,7 @@ def main(cli_args):
 
 if __name__ == "__main__":
     import sys
-    sys.argv = ["", "-i=ort", '--int4', "-e", "-tp=4"]
+    #sys.argv = ["", "-i=ort", '--int4', "-tp=4"]#"-e",
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument('-e', '--export_onnx', action="store_true", default=False, help='export onnx models')
     parser.add_argument('-q', '--do_quant', action="store_true", default=False, help='quant onnx models')

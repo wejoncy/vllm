@@ -135,7 +135,7 @@ class RotaryEmbedding(nn.Module):
             query_pass = query[..., self.rotary_dim:]
             key_pass = key[..., self.rotary_dim:]
 
-        cos_sin = self.cos_sin_cache[positions]
+        cos_sin = self.cos_sin_cache.to(positions.device)[positions]
         cos, sin = cos_sin.chunk(2, dim=-1)
         if self.is_neox_style:
             # NOTE(woosuk): Here we assume that the positions tensor has the
@@ -166,6 +166,7 @@ class RotaryEmbedding(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self._forward(positions, query, key)
         if torch.onnx.is_in_onnx_export():
             return ONNXRotaryEmbedding.apply(positions, query, key, self.head_size, self.cos_sin_cache, self.is_neox_style)
         # ops.rotary_embedding() is an in-place operation that
