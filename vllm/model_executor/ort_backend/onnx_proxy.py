@@ -8,9 +8,17 @@ import numpy as np
 from pathlib import Path
 import tempfile
 
-from vllm.model_executor.input_c_metadata import ConvertInputMetadataToC, GetAddrForCStruct, InputMetadata, set_current_input_metadata
-from vllm.model_executor.parallel_utils.parallel_state import (get_tensor_model_parallel_group,
-                                                               get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size)
+from vllm.model_executor.input_c_metadata import (
+    ConvertInputMetadataToC,
+    GetAddrForCStruct,
+    InputMetadata,
+    set_current_input_metadata,
+)
+from vllm.model_executor.parallel_utils.parallel_state import (
+    get_tensor_model_parallel_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
 from vllm.sequence import SamplerOutput
 from vllm.logger import init_logger
 
@@ -20,8 +28,7 @@ from vllm.file_baton import FileBaton
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 logger = init_logger(__name__)
 
-MODEL_BASE_PATH = os.getenv(
-    'MODEL_BASE_PATH', f'{tempfile.gettempdir()}/vllm/export_onnx')    
+MODEL_BASE_PATH = os.getenv("MODEL_BASE_PATH", f"{tempfile.gettempdir()}/vllm/export_onnx")
 
 import onnxruntime  # noqa
 from vllm import paged_attn
@@ -65,24 +72,37 @@ class AutoONNXForCausalLM:
         self.ort_hidden_states = None
         self.ort_session = None
         self.run_options = None
-        self.has_bind_cache_kv  = False
-        self.metadata_pointer_tensor = torch.empty((1), dtype=torch.int64, device='cpu')
-        self.enable_ort = config.backend == 'ort'
-        self.set_model(None, config.name_or_path or config.auto_map['AutoConfig'].split('--')[0])
+        self.has_bind_cache_kv = False
+        self.metadata_pointer_tensor = torch.empty((1), dtype=torch.int64, device="cpu")
+        self.enable_ort = config.backend == "ort"
+        self.set_model(None, config.name_or_path or config.auto_map["AutoConfig"].split("--")[0])
 
     def init_ort_session(self):
         if self.enable_ort and not self.do_export and self.ort_session is None:
-            provider_opt = {"device_id": get_tensor_model_parallel_rank(),
-                            #"has_user_compute_stream" : "true",
-                            #"user_compute_stream" : str(torch.cuda.current_stream().cuda_stream)
-                            }
-            self.model and self.model.to('cpu')
+            provider_opt = {
+                "device_id": get_tensor_model_parallel_rank(),
+                # "has_user_compute_stream" : "true",
+                # "user_compute_stream" : str(torch.cuda.current_stream().cuda_stream)
+            }
+            self.model and self.model.to("cpu")
             self.model = None
             torch.cuda.empty_cache()
             session_options = onnxruntime.SessionOptions()
             session_options.register_custom_ops_library(paged_attn.__file__)
+            # Check whether GPU (NVIDIA/AMD) is available
+            ep = "CPUExecutionProvider"
+            if torch.cuda.is_available():
+                if torch.version.cuda is not None:
+                    ep = "CUDAExecutionProvider"
+                elif torch.version.hip is not None:
+                    ep = "ROCMExecutionProvider"
+                else:
+                    logger.warn(
+                        f"Unknown GPU device: {torch.cuda.get_device_name()}, use CPUExecutionProvider instead."
+                    )
             self.ort_session = onnxruntime.InferenceSession(
-                self.onnx_filepath, providers=[('CUDAExecutionProvider', provider_opt)], sess_options=session_options)
+                self.onnx_filepath, providers=[(ep, provider_opt)], sess_options=session_options
+            )
             self.ort_binding = self.ort_session.io_binding()
             self.has_position_ids_inputs = "position_ids" in [i.name for i in self.ort_session.get_inputs()]
             self.run_options = onnxruntime.RunOptions()
@@ -92,52 +112,68 @@ class AutoONNXForCausalLM:
         self.model = model
         if self.onnx_filepath is None:
             import re
-            while model_path_or_name[-1] == '/':
+
+            while model_path_or_name[-1] == "/":
                 model_path_or_name = model_path_or_name[:-1]
-            model_path_or_name = model_path_or_name.split('/')[-1]
-            model_path_or_name = re.sub(r'[^0-9a-zA-Z]', '_', model_path_or_name)
+            model_path_or_name = model_path_or_name.split("/")[-1]
+            model_path_or_name = re.sub(r"[^0-9a-zA-Z]", "_", model_path_or_name)
 
             onnx_model_name = model_path_or_name
             onnx_filepath = f"{MODEL_BASE_PATH}/{onnx_model_name}.onnx"
             if get_tensor_model_parallel_world_size() > 1:
                 onnx_filepath = onnx_filepath.replace(".onnx", f"_rank_{get_tensor_model_parallel_rank()}.onnx")
             self.onnx_filepath = Path(onnx_filepath)
-            baton = FileBaton(os.path.join('/tmp/', 'vllm_ort_lock'))
+            baton = FileBaton(os.path.join("/tmp/", "vllm_ort_lock"))
             with baton.exclude_lock():
                 self.onnx_filepath.parent.exists() or self.onnx_filepath.parent.mkdir(parents=True, exist_ok=True)
         self.do_export = not self.onnx_filepath.exists()
         if self.do_export:
-            logger.warn(f'{self.onnx_filepath} is not exist, will export onnx model on the fly............')
+            logger.warn(f"{self.onnx_filepath} does not exist, will export onnx model on the fly............")
 
         self.init_ort_session()
 
-    def export_onnx(self, ort_backend, input_ids: torch.Tensor,
-                    positions: torch.Tensor,
-                    input_metadata: InputMetadata,
-                    kv_caches: List[KVCache],):
+    def export_onnx(
+        self,
+        ort_backend,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        input_metadata: InputMetadata,
+        kv_caches: List[KVCache],
+    ):
         if not self.do_export:
             return
         torch_module = ort_backend.torch_module
+
         def _export_onnx(input_ids, positions, input_metadata: InputMetadata, kv_caches):
             assert isinstance(input_metadata, InputMetadata)
-            self.dummpy_inputs = (input_ids, positions, kv_caches, input_metadata
-            ) if self.dummpy_inputs is None else self.dummpy_inputs
-         
+            self.dummpy_inputs = (
+                (input_ids, positions, kv_caches, input_metadata) if self.dummpy_inputs is None else self.dummpy_inputs
+            )
+
             layer_num = self.config.num_hidden_layers
             seq_dim = len(input_ids.shape) - 1
             onnx_dynamic_axes = {"input_ids": {seq_dim: "seq_len"}, "position_ids": {seq_dim: "seq_len"}}
-            if seq_dim>0:
+            if seq_dim > 0:
                 onnx_dynamic_axes["input_ids"][0] = "batch_size"
                 onnx_dynamic_axes["position_ids"][0] = "batch_size"
             onnx_inp_names = ["input_ids", "position_ids"]
             for i in range(layer_num):
-                onnx_inp_names.append(f'key_cache.{i*2+1}')
-                onnx_inp_names.append(f'value_cache.{i*2+1}')
-                onnx_dynamic_axes[onnx_inp_names[-2]] = {0: "num_blocks",
-                                                         1: "num_heads", 2: "head_size_x", 3: "block_size", 4: "x"}
-                onnx_dynamic_axes[onnx_inp_names[-1]] = {0: "num_blocks",
-                                                         1: "num_heads", 2: "head_size", 3: "block_size"}
-                
+                onnx_inp_names.append(f"key_cache.{i*2+1}")
+                onnx_inp_names.append(f"value_cache.{i*2+1}")
+                onnx_dynamic_axes[onnx_inp_names[-2]] = {
+                    0: "num_blocks",
+                    1: "num_heads",
+                    2: "head_size_x",
+                    3: "block_size",
+                    4: "x",
+                }
+                onnx_dynamic_axes[onnx_inp_names[-1]] = {
+                    0: "num_blocks",
+                    1: "num_heads",
+                    2: "head_size",
+                    3: "block_size",
+                }
+
             onnx_inp_names.append("input_metadata")
             onnx_inp_names = tuple(onnx_inp_names)
 
@@ -151,26 +187,44 @@ class AutoONNXForCausalLM:
                     onnx_inputs[i] = [cache_ins for _ in range(layer_num)]
 
             import shutil
+
             rank = get_tensor_model_parallel_rank()
             onnx_path = Path(self.onnx_filepath)
 
-            tmp_onnx = onnx_path.parent/f'tmp_{rank}'/onnx_path.name
+            tmp_onnx = onnx_path.parent / f"tmp_{rank}" / onnx_path.name
             tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
             tmp_onnx.parent.mkdir(parents=True)
 
-            torch.onnx.export(model=torch_module, args=tuple(onnx_inputs), f=str(tmp_onnx), verbose=False, opset_version=17,
-                              input_names=onnx_inp_names, output_names=onnx_out_names, dynamic_axes=onnx_dynamic_axes)
+            torch.onnx.export(
+                model=torch_module,
+                args=tuple(onnx_inputs),
+                f=str(tmp_onnx),
+                verbose=False,
+                opset_version=17,
+                input_names=onnx_inp_names,
+                output_names=onnx_out_names,
+                dynamic_axes=onnx_dynamic_axes,
+            )
 
             onnx_path.exists() and onnx_path.unlink()
-            (onnx_path.parent/onnx_path.with_suffix('.data').name).exists() and (
-                onnx_path.parent/onnx_path.with_suffix('.data').name).unlink()
+            (onnx_path.parent / onnx_path.with_suffix(".data").name).exists() and (
+                onnx_path.parent / onnx_path.with_suffix(".data").name
+            ).unlink()
 
             import onnx
+
             onnx_model = onnx.load(str(tmp_onnx))
             assert onnx_model.graph.output[0].name == "last_hidden_state"
             del onnx_model.graph.output[1:]
-            onnx.save_model(onnx_model, str(self.onnx_filepath), save_as_external_data=True, all_tensors_to_one_file=True,
-                            location=onnx_path.with_suffix('.data').name, size_threshold=1024, convert_attribute=False)
+            onnx.save_model(
+                onnx_model,
+                str(self.onnx_filepath),
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                location=onnx_path.with_suffix(".data").name,
+                size_threshold=1024,
+                convert_attribute=False,
+            )
 
             logger.info(f" rank:{rank} export onnx success. ------------")
             if get_tensor_model_parallel_world_size() > 1:
@@ -183,12 +237,17 @@ class AutoONNXForCausalLM:
         sampler = torch_module.sampler
         torch_module.sampler = Identify()
         if input_ids.dim() > 1:
-            input_ids = input_ids[:1,:]
-            positions = positions[:1,:]
+            input_ids = input_ids[:1, :]
+            positions = positions[:1, :]
         with torch.no_grad():
-            _export_onnx(input_ids, positions, input_metadata, kv_caches, )
+            _export_onnx(
+                input_ids,
+                positions,
+                input_metadata,
+                kv_caches,
+            )
         torch_module.sampler = sampler
-        if hasattr(torch_module, 'lm_head_weight'):
+        if hasattr(torch_module, "lm_head_weight"):
             lm_head_weight = torch_module.lm_head_weight
         else:
             lm_head_weight = torch_module.lm_head.weight
@@ -202,14 +261,18 @@ class AutoONNXForCausalLM:
         input_metadata: InputMetadata,
         kv_caches: List[KVCache],
     ) -> SamplerOutput:
-        assert self.ort_session.get_inputs()[0].type == 'tensor(int64)' and input_ids.is_contiguous() and positions.is_contiguous()
+        assert (
+            self.ort_session.get_inputs()[0].type == "tensor(int64)"
+            and input_ids.is_contiguous()
+            and positions.is_contiguous()
+        )
 
         Y_shape = (*input_ids.shape, self.config.hidden_size)
         if self.ort_hidden_states is None:
             self.ort_hidden_states = torch.empty(Y_shape, dtype=torch.float16, device=input_ids.device).contiguous()
 
         self.ort_binding.bind_input(
-            name='input_ids',
+            name="input_ids",
             device_type=input_ids.device.type,
             device_id=input_ids.device.index,
             element_type=np.int64,
@@ -218,7 +281,7 @@ class AutoONNXForCausalLM:
         )
         if self.has_position_ids_inputs:
             self.ort_binding.bind_input(
-                name='position_ids',
+                name="position_ids",
                 device_type=positions.device.type,
                 device_id=positions.device.index,
                 element_type=np.int64,
@@ -230,8 +293,8 @@ class AutoONNXForCausalLM:
         set_current_input_metadata(input_metadata)
         if self.has_bind_cache_kv == False:
             self.ort_binding.bind_input(
-                name='input_metadata',
-                device_type='cuda',
+                name="input_metadata",
+                device_type="cuda",
                 device_id=positions.device.index,
                 element_type=np.int64,
                 shape=tuple(self.metadata_pointer_tensor.shape),
@@ -242,7 +305,7 @@ class AutoONNXForCausalLM:
                 k_tensor = kv_caches[i][0] if kv_caches[i][0] is not None else self.none_tensor_k
                 v_tensor = kv_caches[i][1] if kv_caches[i][0] is not None else self.none_tensor_v
                 self.ort_binding.bind_input(
-                    name=f'key_cache.{i*2+1}',
+                    name=f"key_cache.{i*2+1}",
                     device_type=k_tensor.device.type,
                     device_id=k_tensor.device.index,
                     element_type=kv_cache_dtype,
@@ -250,7 +313,7 @@ class AutoONNXForCausalLM:
                     buffer_ptr=k_tensor.data_ptr(),
                 )
                 self.ort_binding.bind_input(
-                    name=f'value_cache.{i*2+1}',
+                    name=f"value_cache.{i*2+1}",
                     device_type=v_tensor.device.type,
                     device_id=v_tensor.device.index,
                     element_type=kv_cache_dtype,
@@ -260,7 +323,7 @@ class AutoONNXForCausalLM:
             self.has_bind_cache_kv = kv_caches[0][0] != None
 
         self.ort_binding.bind_output(
-            name='last_hidden_state',
+            name="last_hidden_state",
             device_type=self.ort_hidden_states.device.type,
             device_id=self.ort_hidden_states.device.index,
             element_type=np.float16,
@@ -268,4 +331,4 @@ class AutoONNXForCausalLM:
             buffer_ptr=self.ort_hidden_states.data_ptr(),
         )
         self.ort_session.run_with_iobinding(self.ort_binding, run_options=self.run_options)
-        return self.ort_hidden_states[:input_ids.numel()]
+        return self.ort_hidden_states[: input_ids.numel()]

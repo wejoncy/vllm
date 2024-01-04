@@ -10,6 +10,7 @@
 #include <ops.h>
 
 // flas_api.cc
+#ifndef USE_ROCM
 std::vector<at::Tensor> mha_varlen_fwd(
     const at::Tensor
         &q, // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
@@ -26,3 +27,20 @@ std::vector<at::Tensor> mha_varlen_fwd(
     const float softmax_scale, const bool zero_tensors, const bool is_causal,
     const int window_size_left, int window_size_right,
     const bool return_softmax, c10::optional<at::Generator> gen_);
+#else
+std::vector<at::Tensor>
+mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
+               const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+               const at::Tensor &v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+               c10::optional<at::Tensor> &out_, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
+               const at::Tensor &cu_seqlens_q,  // b+1
+               const at::Tensor &cu_seqlens_k,  // b+1
+               const int max_seqlen_q,
+               const int max_seqlen_k,
+               const float p_dropout,
+               const float softmax_scale,
+               const bool zero_tensors,
+               const bool is_causal,
+               const bool return_softmax,
+               c10::optional<at::Generator> gen_);
+#endif

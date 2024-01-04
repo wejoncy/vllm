@@ -86,6 +86,7 @@ void PagedAttentionOpCompute(
     auto max_seqlen_k = input_metadata->attn_bias.k_seqinfo.max_seqlen;
     auto optional_output_torch = c10::make_optional(output_view);
     // multihead_attention_cuda
+#ifndef USE_ROCM
     auto dprops = at::cuda::getCurrentDeviceProperties();
     c10::optional<torch::Tensor> none;
     if (dprops->major >= 8 && dprops->minor >= 0) {
@@ -132,6 +133,14 @@ void PagedAttentionOpCompute(
                       output_torch.numel() * sizeof(T),
                       cudaMemcpyDeviceToDevice, cuda_stream);
     }
+#else
+    mha_varlen_fwd(query_view, key_view, value_view, optional_output_torch,
+                   seqstart_q_torch, seqstart_k_torch,
+                   // none,
+                   max_seqlen_q, max_seqlen_k,
+                   0.0f, attn_param_.scale_, false, true, false,
+                   c10::nullopt);
+#endif
     CHECK_CUDA_ERROR();
   }
 
