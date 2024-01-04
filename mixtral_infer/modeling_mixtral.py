@@ -325,9 +325,121 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+# use when cache is not None
+class GQAForOnnxExport(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        query_states,
+        key_states,
+        value_states,
+        past_key,
+        past_value,
+        attention_mask,
+        seqlens_k,
+        total_seq_len,
+        num_heads,
+        head_dim,
+        num_key_value_heads,
+        num_key_value_groups,
+    ):
+        bsz, seq_len, hidden_size = query_states.size()
+        if torch.onnx.is_in_onnx_export():
+            return (
+                torch.zeros((bsz, seq_len, hidden_size), dtype=query_states.dtype, device=query_states.device),
+                torch.zeros((bsz, num_heads, past_key.shape[2]+1, head_dim), dtype=query_states.dtype, device=query_states.device),
+                torch.zeros((bsz, num_heads, past_key.shape[2]+1, head_dim), dtype=query_states.dtype, device=query_states.device),
+            )
+
+        query_states = query_states.view(
+            bsz, -1, num_heads, head_dim).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, -1, num_key_value_heads, head_dim).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, -1, num_key_value_heads, head_dim).transpose(1, 2)
+
+        kv_seq_len = key_states.shape[-2]
+
+        key_cache, value_cache = past_key, past_value
+
+        kv_seq_len += key_cache.shape[-2]
+
+        key_states = torch.cat([key_cache, key_states], dim=-2)
+        value_states = torch.cat([value_cache, value_states], dim=-2)
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, num_key_value_groups)
+        value_states = repeat_kv(value_states, num_key_value_groups)
+
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(2, 3)) / math.sqrt(head_dim)
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        # upcast attention to fp32[]
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, -1, hidden_size)
+
+        return attn_output, key_states, value_states
+
+
+    @staticmethod
+    def symbolic(g: torch.Graph,
+                 query_states,
+                 key_states,
+                 value_states,
+                 past_key,
+                 past_value,
+                 attention_mask,
+                 seqlens_k,
+                 total_seq_len,
+                 num_heads,
+                 head_dim,
+                 num_key_value_heads,
+                 num_key_value_groups):
+        import torch._C._onnx as _C_onnx
+        total_sequence_length = g.op("Cast", total_seq_len, to_i=_C_onnx.TensorProtoDataType.INT32)
+        sequence_lengths_k = g.op("Cast", seqlens_k, to_i=_C_onnx.TensorProtoDataType.INT32)
+        if get_tensor_model_parallel_world_size() > 1:
+            outputs = g.op("com.microsoft::GroupQueryAttention",
+                            query_states,
+                            key_states,
+                            value_states,
+                            past_key,
+                            past_value,
+                            sequence_lengths_k,
+                            total_sequence_length,
+                            num_heads_i=num_heads,
+                            kv_num_heads_i=num_key_value_heads,
+                            scale_f=0.08838834764,
+                            outputs=3)
+        else:
+            outputs = g.op("com.microsoft::GroupQueryAttention",
+                            query_states,
+                            key_states,
+                            value_states,
+                            past_key,
+                            past_value,
+                            sequence_lengths_k,
+                            total_sequence_length,
+                            num_heads_i=num_heads,
+                            kv_num_heads_i=num_key_value_heads,
+                            scale_f=0.08838834764,
+                            outputs=3)
+        attn_output, present_key, present_value = outputs[0], outputs[1], outputs[2]
+        attn_output.setType(query_states.type())
+        present_key.setType(past_key.type())
+        present_value.setType(past_value.type())
+
+        return attn_output, present_key, present_value
+
 # Copied from transformers.models.mistral.modeling_mistral.MistralAttention with Mistral->Mixtral
-
-
 class MixtralNotPagedAttn(nn.Module):
     """
     Multi-headed attention from 'Attention Is All You Need' paper. Modified to use sliding window attention: Longformer
@@ -358,8 +470,28 @@ class MixtralNotPagedAttn(nn.Module):
         key_states: torch.Tensor,
         value_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        seqlens_k: Optional[torch.Tensor] = None,
         past_key_value=None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if past_key_value is not None and torch.onnx.is_in_onnx_export():
+            key_cache, value_cache = past_key_value
+            kv_seq_len = key_states.shape[-2]
+            kv_seq_len += key_cache.shape[-2]
+            attn_output, present_key, present_value = GQAForOnnxExport.apply(
+                query_states,
+                key_states,
+                value_states,
+                key_cache,
+                value_cache,
+                attention_mask,
+                seqlens_k,
+                kv_seq_len,
+                self.num_heads,
+                self.head_dim,
+                self.num_key_value_heads,
+                self.num_key_value_groups,
+            )
+            return attn_output, (present_key, present_value)
         bsz, seq_len, hidden_size = query_states.size()
 
         query_states = query_states.view(
@@ -465,6 +597,7 @@ class MixtralAttention(nn.Module):
         position_ids: torch.Tensor,
         attention_mask,
         hidden_states: torch.Tensor,
+        seqlens_k,
         kv_cache,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
@@ -472,7 +605,7 @@ class MixtralAttention(nn.Module):
         q, k = self.rotary_emb(position_ids, q, k)
 
         # k_cache, v_cache = kv_cache
-        attn_output, kv_cache = self.attn(q, k, v, attention_mask, kv_cache)
+        attn_output, kv_cache = self.attn(q, k, v, attention_mask, seqlens_k, kv_cache)
         output, _ = self.o_proj(attn_output)
         return output, kv_cache
 
@@ -510,6 +643,7 @@ class MixtralDecoderLayer(nn.Module):
         self,
         position_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        seqlens_k: torch.Tensor,
         hidden_states: torch.Tensor,
         kv_cache,
         residual: Optional[torch.Tensor],
@@ -525,6 +659,7 @@ class MixtralDecoderLayer(nn.Module):
             position_ids=position_ids,
             attention_mask=attention_mask,
             hidden_states=hidden_states,
+            seqlens_k=seqlens_k,
             kv_cache=kv_cache,
         )
 
@@ -561,6 +696,7 @@ class MixtralModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        seqlens_k: torch.Tensor,
         position_ids: torch.Tensor,
         past_key_values,
     ):
@@ -589,7 +725,7 @@ class MixtralModel(nn.Module):
         kv_caches_list = [None] * len(self.layers)
         for i in range(len(self.layers)):
             layer = self.layers[i]
-            hidden_states, residual, kv_caches_list[i] = layer(position_ids, attention_mask, hidden_states,
+            hidden_states, residual, kv_caches_list[i] = layer(position_ids, attention_mask, seqlens_k, hidden_states,
                                                                past_key_values[i] if past_key_values is not None else None,
                                                                residual)
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -621,10 +757,11 @@ class MixtralForCausalLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor = None,
+        seqlens_k: torch.Tensor = None,
         position_ids: torch.Tensor = None,
         past_key_values: List[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
-        hidden_states, past_key_values = self.model(input_ids, attention_mask, position_ids, past_key_values)
+        hidden_states, past_key_values = self.model(input_ids, attention_mask, seqlens_k, position_ids, past_key_values)
         logits = torch.matmul(hidden_states, self.lm_head.weight.t())
         logits = tensor_model_parallel_all_gather(logits)
         return Output(logits, past_key_values)
@@ -653,8 +790,8 @@ class MixtralForCausalLM(nn.Module):
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:
                     continue
-                #if 'model.layers.' in name and 'model.layers.0' not in name:
-                #   continue
+                if self.config.num_hidden_layers == 1 and 'model.layers.' in name and 'model.layers.0' not in name:
+                   continue
                 name = name.replace(weight_name, param_name)
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
@@ -667,8 +804,8 @@ class MixtralForCausalLM(nn.Module):
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
-                #if 'model.layers.' in name and 'model.layers.0' not in name:
-                #   continue
+                if self.config.num_hidden_layers == 1 and 'model.layers.' in name and 'model.layers.0' not in name:
+                   continue
                 # Skip experts that are not assigned to this worker.
                 if ("block_sparse_moe.experts." in name
                         and name not in params_dict):

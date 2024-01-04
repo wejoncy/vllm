@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 import sys
 import numpy as np
 from modeling_mixtral import MixtralForCausalLM
-
+from int4_quant import quant_onnx_by_4bits
 import torch
 from pathlib import Path
 torch.zeros(1).cuda()
@@ -60,7 +60,14 @@ def export_onnx_no_tp(model: torch.nn.Module, onnx_path_str: str, sample_inputs:
     if not with_past:
         return onnx_path_enc
 
+    onnx_inputs[2] = torch.tensor([onnx_inputs[1].shape[1]+1], dtype=torch.long).cuda()
     onnx_io_tuple = large_model_exporter.fetch_onnx_inputs_outputs_name(model, onnx_inputs, input_keys, past_key_values, with_past, True)
+    onnx_io_tuple = list(onnx_io_tuple)
+    onnx_io_tuple[0] = list(onnx_io_tuple[0])
+    onnx_io_tuple[0].insert(2, "seqlens_k")
+    onnx_io_tuple[0] = tuple(onnx_io_tuple[0])
+    onnx_io_tuple[2]["seqlens_k"] = {0:"batch"}
+    onnx_io_tuple = tuple(onnx_io_tuple)
     # workaround for attention_mask
     onnx_inputs[1] = onnx_inputs[1].long()
 
@@ -89,7 +96,7 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
         return export_onnx_no_tp(model, f"{onnx_path}/onnx_models_int4",inputs,True)
     model.to("cuda")
     out, past_key_values = model(**inputs)
-    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask, None, None)
+    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask,None, None, None)
     tmp_onnx = Path(f"{onnx_path}/tmp{rank}/mixtral_rank{rank}.onnx")
     tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
     tmp_onnx.parent.mkdir(exist_ok=True)
@@ -114,8 +121,10 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
     onnx_model = onnx.load(str(tmp_onnx))
     onnx.save_model(onnx_model, str(onnx_model_path), save_as_external_data=True, all_tensors_to_one_file=True,
                     location=tmp_onnx.with_suffix('.data').name, size_threshold=1024, convert_attribute=False)
-
-    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask, None, past_key_values)
+    
+    # export with_past
+    seqlens_k = torch.tensor([inputs.input_ids.shape[0]]).cuda()
+    onnx_pt_inputs = (inputs.input_ids, inputs.attention_mask, seqlens_k, None, past_key_values)
     tmp_onnx = Path(f"{onnx_path}/tmp{rank}/mixtral_with_past_rank{rank}.onnx")
     tmp_onnx.parent.exists() and shutil.rmtree(tmp_onnx.parent)
     tmp_onnx.parent.mkdir(exist_ok=True)
@@ -124,11 +133,11 @@ def export_onnx(model_name, tensor_parallel_size, rank, onnx_path):
     onnx_pastmodel_path.exists() and onnx_pastmodel_path.unlink()
     (onnx_pastmodel_path.parent/onnx_pastmodel_path.with_suffix('.data').name).exists() and (
         onnx_pastmodel_path.parent/onnx_pastmodel_path.with_suffix('.data').name).unlink()
-    onnx_inp_names = ("input_ids", "attention_mask")
+    onnx_inp_names = ("input_ids", "attention_mask", "seqlens_k")
     for layer_idx in range(model.config.num_hidden_layers):
         onnx_inp_names = onnx_inp_names + \
             (f"present_key.{layer_idx}", f"present_values.{layer_idx}")
-    dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}}
+    dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}, "seqlens_k": {0: "batch_size"}}
     for layer_idx in range(model.config.num_hidden_layers):
         dynamic_axes[f"present_key.{layer_idx}"] = {
             0: "batch_size", 2: "seq_len", 1: "num_heads", 3: "head_dim"}
@@ -158,6 +167,7 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
     if not isinstance(model_or_sess, nn.Module):
         attention_mask = inputs.attention_mask.cpu().numpy()
         onnx_inputs = {"input_ids": inputs.input_ids.cpu().numpy(), "attention_mask":inputs.attention_mask.cpu().numpy()}
+        seq_len = inputs.input_ids.shape[1]
         ortout = model_or_sess.run(None, onnx_inputs)
         out = torch.from_numpy(ortout[0]).cuda()
         onnx_model_path = Path(
@@ -179,9 +189,12 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
         if isinstance(model_or_sess, nn.Module):
             outputs = model_or_sess(next_id, past_key_values=past_key_values)
             out, past_key_values = outputs.values()
-        else:
+        else:#
+            seqlens_k = len(gen_ids) + seq_len - 1
             attention_mask = np.concatenate([attention_mask,np.ones((attention_mask.shape[0],1),attention_mask.dtype)], axis=-1)
-            onnx_inputs = {"input_ids": next_id.cpu().numpy(), "attention_mask":attention_mask}
+            onnx_inputs = {"input_ids": next_id.cpu().numpy()}
+            #onnx_inputs["attention_mask"] = attention_mask
+            onnx_inputs["seqlens_k"] = np.array([seqlens_k] * next_id.shape[0])
             for layer_idx in range(config.num_hidden_layers):
                 onnx_inputs[f"present_key.{layer_idx}"] = ortout[1+layer_idx*2]
                 onnx_inputs[f"present_values.{layer_idx}"] = ortout[1+layer_idx*2+1]
@@ -193,13 +206,13 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
         print(tokenizer.decode(gen_ids[0]))
 
 
-def test_infer_model(model_name, tensor_parallel_size, rank, onnx_path):
+def test_infer_model(model_name, tensor_parallel_size, rank, onnx_path, backend="torch"):
     middle_onnx_path = "onnx_models" if tensor_parallel_size > 1 else "onnx_models_int4"
     torch.set_default_dtype(torch.float16)
     config = transformers.AutoConfig.from_pretrained(
         model_name, trust_remote_code=True)
 
-    test_torch = False
+    test_torch = backend=="torch"
     os.environ['LOCAL_WORLD_SIZE'] = str(tensor_parallel_size)
     os.environ['LOCAL_RANK'] = str(rank)
     torch.cuda.set_device(rank)
@@ -230,9 +243,13 @@ def process_entry(tensor_parallel_size, rank, cli_args):
 
     if cli_args.export_onnx:
         export_onnx(cli_args.model, tensor_parallel_size, rank, cli_args.onnx_path)
-    
+    if cli_args.int4 and tensor_parallel_size == 1:
+        middle_onnx_path = "onnx_models" if tensor_parallel_size > 1 else "onnx_models_int4"
+        onnx_model_path = Path(
+            f"{cli_args.onnx_path}/{middle_onnx_path}/mixtral_rank{rank}.onnx").absolute()
+        quant_onnx_by_4bits(onnx_model_path, str(onnx_model_path).replace(".onnx", "_int4.onnx"))
     if cli_args.infer:
-        test_infer_model(cli_args.model, tensor_parallel_size, rank, cli_args.onnx_path)
+        test_infer_model(cli_args.model, tensor_parallel_size, rank, cli_args.onnx_path, cli_args.infer)
 
 
 def main(cli_args):
@@ -254,10 +271,11 @@ def main(cli_args):
 
 if __name__ == "__main__":
     import sys
-    sys.argv = ["", "-i=torch", "-e"]
+    sys.argv = ["", "-i=ort"]#, "-e"]
     parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument('-e', '--export_onnx',  action="store_true", default=False, help='export onnx models')
+    parser.add_argument('-e', '--export_onnx', action="store_true", default=False, help='export onnx models')
     parser.add_argument('--onnx_path', type=str, default=CUR_PATH,  help='onnx path')
+    parser.add_argument('--int4', action="store_true", default=False,  help='4bits quant')
     parser.add_argument("-m", '--model', type=str, default=f'{CUR_PATH}/Mixtral-8x7B-Instruct-v0.1/',  help='onnx path where load from or saved to')
     parser.add_argument('-tp', '--tensor_parallel_size', type=int, default=1, choices=[1,2,4,8],  help='tp size')
     parser.add_argument('-i', '--infer', type=str, default="", choices=["", "torch", "ort"],  help='the backend to run models')
