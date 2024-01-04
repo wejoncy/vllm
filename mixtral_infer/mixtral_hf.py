@@ -166,19 +166,15 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
 
     if not isinstance(model_or_sess, nn.Module):
         attention_mask = inputs.attention_mask.cpu().numpy()
-        onnx_inputs = {"input_ids": inputs.input_ids.cpu().numpy(), "attention_mask":inputs.attention_mask.cpu().numpy()}
         seq_len = inputs.input_ids.shape[1]
+        batch_size = inputs.input_ids.shape[0]
+        onnx_inputs = {"input_ids": inputs.input_ids.cpu().numpy()}
+        onnx_inputs["seqlens_k"] = np.array([seq_len + 1] * batch_size) # hack
+        for layer_idx in range(config.num_hidden_layers):
+            onnx_inputs[f"present_key.{layer_idx}"] = np.zeros([batch_size, 8, 0, 128]).astype(np.float16)
+            onnx_inputs[f"present_values.{layer_idx}"] = np.zeros([batch_size, 8, 0, 128]).astype(np.float16)
         ortout = model_or_sess.run(None, onnx_inputs)
         out = torch.from_numpy(ortout[0]).cuda()
-        onnx_model_path = Path(
-            f"{onnx_path}/{middle_onnx_path}/mixtral_with_past_rank{rank}.onnx").absolute()
-        import onnxruntime
-        from vllm import paged_attn
-        session_options = onnxruntime.SessionOptions()
-        session_options.register_custom_ops_library(paged_attn.__file__)
-        provider_opt = {"device_id": rank, }
-        model_or_sess = onnxruntime.InferenceSession(str(onnx_model_path), providers=[(
-            "CUDAExecutionProvider", provider_opt)], sess_options=session_options)
     else:
         outputs = model_or_sess(**inputs)
         out, past_key_values = outputs.values()
@@ -191,7 +187,7 @@ def infer_model(model_name, tensor_parallel_size, rank, model_or_sess, onnx_path
             out, past_key_values = outputs.values()
         else:#
             seqlens_k = len(gen_ids) + seq_len - 1
-            attention_mask = np.concatenate([attention_mask,np.ones((attention_mask.shape[0],1),attention_mask.dtype)], axis=-1)
+            #attention_mask = np.concatenate([attention_mask,np.ones((attention_mask.shape[0],1),attention_mask.dtype)], axis=-1)
             onnx_inputs = {"input_ids": next_id.cpu().numpy()}
             #onnx_inputs["attention_mask"] = attention_mask
             onnx_inputs["seqlens_k"] = np.array([seqlens_k] * next_id.shape[0])
@@ -225,13 +221,13 @@ def test_infer_model(model_name, tensor_parallel_size, rank, onnx_path, backend=
         # del model,out
         # torch.cuda.empty_cache()
     else:
+        onnx_model_path = Path(
+            f"{onnx_path}/{middle_onnx_path}/mixtral_with_past_rank{rank}.onnx").absolute()
         import onnxruntime
         from vllm import paged_attn
         session_options = onnxruntime.SessionOptions()
         session_options.register_custom_ops_library(paged_attn.__file__)
         provider_opt = {"device_id": rank, }
-        onnx_model_path = Path(
-            f"{onnx_path}/{middle_onnx_path}/mixtral_rank{rank}.onnx").absolute()
         sess = onnxruntime.InferenceSession(str(onnx_model_path), providers=[(
             "CUDAExecutionProvider", provider_opt)], sess_options=session_options)
 
