@@ -240,11 +240,12 @@ def process_entry(tensor_parallel_size, rank, cli_args):
     middle_onnx_path = "onnx_models" if tensor_parallel_size > 1 else "onnx_models_int4"
     onnx_model_path = Path(
         f"{cli_args.onnx_path}/{middle_onnx_path}/mixtral_with_past_rank{rank}.onnx").absolute()
-    if cli_args.int4 and tensor_parallel_size == 1:
+    if cli_args.do_quant and tensor_parallel_size == 1:
         int4_onnx_path = onnx_model_path.with_stem(onnx_model_path.stem+"_int4")
         int4_onnx_path.unlink(missing_ok=True)
         int4_onnx_path.with_suffix(".onnx.data").unlink(missing_ok=True)
         quant_onnx_by_4bits(onnx_model_path, int4_onnx_path)
+    if (cli_args.do_quant or cli_args.int4) and tensor_parallel_size == 1:
         onnx_model_path = int4_onnx_path
     if cli_args.infer:
         test_infer_model(cli_args.model, tensor_parallel_size, rank, onnx_model_path, cli_args.infer, cli_args.int4)
@@ -269,9 +270,10 @@ def main(cli_args):
 
 if __name__ == "__main__":
     import sys
-    #sys.argv = ["", "-i=ort", '--int4']#, "-e"]
+    sys.argv = ["", "-i=ort", '--int4', "-e", "-tp=4"]
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument('-e', '--export_onnx', action="store_true", default=False, help='export onnx models')
+    parser.add_argument('-q', '--do_quant', action="store_true", default=False, help='quant onnx models')
     parser.add_argument('--onnx_path', type=str, default=CUR_PATH,  help='onnx path')
     parser.add_argument('--int4', action="store_true", default=False,  help='4bits quant')
     parser.add_argument("-m", '--model', type=str, default=f'{CUR_PATH}/Mixtral-8x7B-Instruct-v0.1/',  help='onnx path where load from or saved to')
