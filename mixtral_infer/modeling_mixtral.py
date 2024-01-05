@@ -450,7 +450,9 @@ class MixtralNotPagedAttn(nn.Module):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
-        tp_size = get_tensor_model_parallel_world_size()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+
+        tp_size = get_tensor_model_parallel_world_size() if not disable_qkv_o_tp else 1
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads//tp_size
         self.head_dim = self.hidden_size // config.num_attention_heads
@@ -545,7 +547,9 @@ class MixtralAttention(nn.Module):
                  linear_method: Optional[LinearMethodBase] = None,
                  sliding_window: Optional[int] = None) -> None:
         super().__init__()
-        tp_size = get_tensor_model_parallel_world_size()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+
+        tp_size = get_tensor_model_parallel_world_size() if not disable_qkv_o_tp else 1
         self.hidden_size = hidden_size
         self.total_num_heads = num_heads
         assert self.total_num_heads % tp_size == 0
@@ -603,6 +607,7 @@ class MixtralAttention(nn.Module):
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(position_ids, q, k)
+        v = v.contiguous()
 
         # k_cache, v_cache = kv_cache
         attn_output, kv_cache = self.attn(q, k, v, attention_mask, seqlens_k, kv_cache)

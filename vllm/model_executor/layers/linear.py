@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-
+import os
 import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
@@ -164,7 +164,9 @@ class ColumnParallelLinear(torch.nn.Module):
         self.output_size = output_size
         self.gather_output = gather_output
         # Divide the weight matrix along the last dimension.
-        tp_size = get_tensor_model_parallel_world_size()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+
+        tp_size = get_tensor_model_parallel_world_size() if not disable_qkv_o_tp else 1
         self.output_size_per_partition = divide(output_size, tp_size)
         self.skip_bias_add = skip_bias_add
         if params_dtype is None:
@@ -193,7 +195,9 @@ class ColumnParallelLinear(torch.nn.Module):
             self.register_parameter("bias", None)
 
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
-        tp_rank = get_tensor_model_parallel_rank()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+
+        tp_rank = get_tensor_model_parallel_rank() if not disable_qkv_o_tp else 1
         output_dim = getattr(param, "output_dim", None)
         param_data = param.data
         if output_dim is not None:
@@ -355,7 +359,8 @@ class QKVParallelLinear(ColumnParallelLinear):
             total_num_kv_heads = total_num_heads
         self.total_num_kv_heads = total_num_kv_heads
         # Divide the weight matrix along the last dimension.
-        tp_size = get_tensor_model_parallel_world_size()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+        tp_size = get_tensor_model_parallel_world_size() if not disable_qkv_o_tp else 1
         self.num_heads = divide(self.total_num_heads, tp_size)
         if tp_size >= self.total_num_kv_heads:
             self.num_kv_heads = 1
@@ -402,7 +407,8 @@ class QKVParallelLinear(ColumnParallelLinear):
                 self.weight_loader(param, loaded_weight_shard, shard_id)
             return
 
-        tp_rank = get_tensor_model_parallel_rank()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+        tp_rank = get_tensor_model_parallel_rank() if not disable_qkv_o_tp else 0
         assert loaded_shard_id in ["q", "k", "v"]
         if output_dim is not None:
             if loaded_shard_id == "q":
@@ -486,7 +492,8 @@ class RowParallelLinear(torch.nn.Module):
         self.params_dtype = params_dtype
 
         # Divide the weight matrix along the last dimension.
-        self.tp_size = get_tensor_model_parallel_world_size()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+        self.tp_size = get_tensor_model_parallel_world_size() if not disable_qkv_o_tp else 1
         self.input_size_per_partition = divide(input_size, self.tp_size)
         self.skip_bias_add = skip_bias_add
         if linear_method is None:
@@ -517,7 +524,8 @@ class RowParallelLinear(torch.nn.Module):
             self.register_parameter("bias", None)
 
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
-        tp_rank = get_tensor_model_parallel_rank()
+        disable_qkv_o_tp = bool(os.getenv("DISABLE_QKVO_TP", "0"))
+        tp_rank = get_tensor_model_parallel_rank() if not disable_qkv_o_tp else 0
         input_dim = getattr(param, "input_dim", None)
         param_data = param.data
         if input_dim is not None:
