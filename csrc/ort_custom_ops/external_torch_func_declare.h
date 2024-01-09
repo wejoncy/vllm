@@ -6,8 +6,8 @@
 #include <ATen/dlpack.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
-#include <cache.h>
-#include <ops.h>
+#include "../cache.h"
+#include "../ops.h"
 
 // flas_api.cc
 std::vector<at::Tensor> mha_varlen_fwd(

@@ -8,4 +8,4 @@
 #include "onnxruntime_cxx_api.h"
 #undef ORT_API_MANUAL_INIT
 
-#include "onnxruntime_lite_custom_op.h"
+#include "extra_ort_headers/onnxruntime_lite_custom_op.h"

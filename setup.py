@@ -1,3 +1,4 @@
+from xformers import _C_flashattention
 import io
 import os
 import re
@@ -9,7 +10,6 @@ from packaging.version import parse, Version
 import setuptools
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
-
 ROOT_DIR = os.path.dirname(__file__)
 
 MAIN_CUDA_VERSION = "12.1"
@@ -227,6 +227,32 @@ vllm_extension_sources = [
 if _is_cuda():
     vllm_extension_sources.append("csrc/quantization/awq/gemm_kernels.cu")
 
+def download_onnxruntime_headers(version="1.16.3"):
+    from pathlib import Path
+    import urllib
+    import tarfile
+    url = f"https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-linux-x64-gpu-{version}.tgz"
+    fname = Path(f"build/onnxruntime-headers-{version}.tgz").resolve()
+    if not Path(str(fname)[:-4]).exists():
+        if not fname.exists():
+            fname.parent.mkdir(exist_ok=True)
+            print("downloading onnxruntime c++ headers from ", url)
+            urllib.request.urlretrieve(url, fname)
+        with tarfile.open(fname) as tar:
+            tar.extractall(path=fname._str[:-4])
+    return os.path.join(fname._str[:-4], os.listdir(fname._str[:-4])[0], 'include')
+
+
+_build_ort_backend = True
+extra_link_args = []
+include_dirs = []
+if _build_ort_backend:
+    import glob
+    vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
+    extra_link_args.append(_C_flashattention.__file__)
+    include_dirs.append(download_onnxruntime_headers())
+
+
 vllm_extension = CUDAExtension(
     name="vllm._C",
     sources=vllm_extension_sources,
@@ -234,6 +260,8 @@ vllm_extension = CUDAExtension(
         "cxx": CXX_FLAGS,
         "nvcc": NVCC_FLAGS,
     },
+    extra_link_args=extra_link_args,
+    include_dirs=include_dirs,
 )
 ext_modules.append(vllm_extension)
 

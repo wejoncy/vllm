@@ -3,7 +3,7 @@
 
 #include "paged_attn_ops.h"
 
-#include "cuda_context.h"
+#include "extra_ort_headers/cuda_context.h"
 #include "cuda_ops.h"
 #include "external_torch_func_declare.h"
 #include "pt_to_ort_resource.h"
@@ -100,6 +100,12 @@ void PagedAttentionOpCompute(
           "xformers::efficient_attention_forward_cutlass", "");
       auto op = torch::jit::findOperatorFor(full_name);
       TORCH_INTERNAL_ASSERT(op);
+
+      if (query_view.size(1) != key_view.size(1)) {//GQA
+        int group_size = query_view.size(1)/key_view.size(1);
+        key_view = key_view.unsqueeze(1).expand({-1, group_size, -1, -1}).reshape(query_view.sizes());
+        value_view = value_view.unsqueeze(1).expand({-1, group_size, -1, -1}).reshape(query_view.sizes());
+      }
 
       torch::jit::Stack stack;
       torch::jit::push(stack, query_view.unsqueeze(0));

@@ -15,6 +15,7 @@ from vllm.sequence import SamplerOutput
 from vllm.logger import init_logger
 
 from vllm.file_baton import FileBaton
+from vllm import _C 
 
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
@@ -24,7 +25,6 @@ MODEL_BASE_PATH = os.getenv(
     'MODEL_BASE_PATH', f'{tempfile.gettempdir()}/vllm/export_onnx')    
 
 import onnxruntime  # noqa
-from vllm import paged_attn
 
 
 class Identify(nn.Module):
@@ -72,6 +72,8 @@ class AutoONNXForCausalLM:
 
     def init_ort_session(self):
         if self.enable_ort and not self.do_export and self.ort_session is None:
+            os.environ['LOCAL_WORLD_SIZE'] = str(get_tensor_model_parallel_world_size())
+            os.environ['LOCAL_RANK'] = str(get_tensor_model_parallel_rank())
             provider_opt = {"device_id": get_tensor_model_parallel_rank(),
                             #"has_user_compute_stream" : "true",
                             #"user_compute_stream" : str(torch.cuda.current_stream().cuda_stream)
@@ -80,7 +82,7 @@ class AutoONNXForCausalLM:
             self.model = None
             torch.cuda.empty_cache()
             session_options = onnxruntime.SessionOptions()
-            session_options.register_custom_ops_library(paged_attn.__file__)
+            session_options.register_custom_ops_library(_C.__file__)
             self.ort_session = onnxruntime.InferenceSession(
                 self.onnx_filepath, providers=[('CUDAExecutionProvider', provider_opt)], sess_options=session_options)
             self.ort_binding = self.ort_session.io_binding()

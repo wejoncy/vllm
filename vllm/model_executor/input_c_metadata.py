@@ -7,7 +7,7 @@ from ctypes import (Structure, c_longlong, c_void_p, c_char_p, byref)
 
 from .layers.attention import _make_alibi_bias
 from . import InputMetadata
-from vllm import paged_attn
+from vllm._C import ort_ops
 
 class C_AttnBiasBase(Structure):
     _fields_ = [
@@ -54,7 +54,7 @@ event_list_c = C_THEvent()
 
 
 def set_current_input_metadata(input_metadata:InputMetadata):
-    paged_attn.reset_ort_input_metadata()
+    ort_ops.reset_ort_input_metadata()
     global current_input_metadata
     current_input_metadata = input_metadata
 

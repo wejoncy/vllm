@@ -1,19 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
-#include "custom_op_library.h"
 
-#define ORT_API_MANUAL_INIT
-#include "onnxruntime_cxx_api.h"
-#undef ORT_API_MANUAL_INIT
+#include "onnxruntime.h"
+
+#include "custom_op_library.h"
 
 #include <vector>
 #include <cmath>
 #include <mutex>
 #include <system_error>
 
-#include "extension_ops/cuda_ops.h"
+#include "cuda_ops.h"
 
-#include "onnxruntime_lite_custom_op.h"
 
 static const char* c_OpDomain = "vllm.ort.ext";
 

@@ -29,16 +29,16 @@ void reset_ort_input_metadata();
 }
 
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("PagedAttention", &torch_ext::paged_attention_forwad,
-        "torch::Tensor paged_attention_forwad("
-        "torch::Tensor out,"
-        "const torch::Tensor &query, const torch::Tensor &key,"
-        "const torch::Tensor &value, const torch::Tensor &key_cache,"
-        "const torch::Tensor &value_cache, const torch::Tensor &input_metadata,"
-        "const torch::Tensor &positions, const torch::Tensor &cos_sin_cache,"
-        "std::string mask_type, float scale,"
-        "const c10::optional<torch::Tensor> &alibi_slopes, int num_head,"
-        "int num_kv_head, int head_size) ");
-  m.def("reset_ort_input_metadata", &torch_ext::reset_ort_input_metadata, "void reset_ort_input_metadata()");
-}
+//PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+//  m.def("PagedAttention", &torch_ext::paged_attention_forwad,
+//        "torch::Tensor paged_attention_forwad("
+//        "torch::Tensor out,"
+//        "const torch::Tensor &query, const torch::Tensor &key,"
+//        "const torch::Tensor &value, const torch::Tensor &key_cache,"
+//        "const torch::Tensor &value_cache, const torch::Tensor &input_metadata,"
+//        "const torch::Tensor &positions, const torch::Tensor &cos_sin_cache,"
+//        "std::string mask_type, float scale,"
+//        "const c10::optional<torch::Tensor> &alibi_slopes, int num_head,"
+//        "int num_kv_head, int head_size) ");
+//  m.def("reset_ort_input_metadata", &torch_ext::reset_ort_input_metadata, "void reset_ort_input_metadata()");
+//}

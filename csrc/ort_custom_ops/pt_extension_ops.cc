@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 #include "pt_extension_ops.h"
-#include "cuda_context.h"
+#include "extra_ort_headers/cuda_context.h"
 #include "external_torch_func_declare.h"
 #include "raw_tensor.h"
 #include "cuda_ops.h"
