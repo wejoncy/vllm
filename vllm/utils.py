@@ -7,6 +7,7 @@ from typing import List
 
 import psutil
 import torch
+import xformers  # vllm._C depends on xformers
 
 from vllm._C import cuda_utils
 
