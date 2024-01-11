@@ -252,7 +252,8 @@ if _build_ort_backend:
     shutil.copy2(_C_flashattention.__file__, "./")
     vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
     base_dir, base_name = os.path.split(_C_flashattention.__file__)
-    extra_link_args.extend([base_name, "-Wl,-rpath=$ORIGIN/../../xformers:$ORIGIN/../"])
+    extra_link_args.extend(
+        [base_name, "-Wl,-rpath=$ORIGIN/../../xformers:$ORIGIN/../:$ORIGIN/../xformers"])
     include_dirs.append(download_onnxruntime_headers())
 
 
