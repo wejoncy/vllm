@@ -24,6 +24,7 @@ class ORTBackend(nn.Module):
     ) -> None:
         super().__init__()
         self.lm_head_weight = None
+        self.lm_head_bias = None
 
         self.ort_model = AutoONNXForCausalLM(config, quant_config)
 
@@ -51,7 +52,7 @@ class ORTBackend(nn.Module):
         sampling_metadata: SamplingMetadata,
     ) -> SamplerOutput:
         next_tokens = self.sampler(self.lm_head_weight, hidden_states,
-                                   sampling_metadata)
+                                   sampling_metadata, self.lm_head_bias)
         return next_tokens
         
     def load_weights(self,
@@ -62,7 +63,9 @@ class ORTBackend(nn.Module):
         from pathlib import Path
         tensor_model_parallel_rank = get_tensor_model_parallel_rank()
         lmhead_weight_path = Path(self.ort_model.onnx_filepath).parent / \
-            f'{self.ort_model.onnx_filepath.stem}_lm_head_rank_{tensor_model_parallel_rank}.pt'
+            f'{self.ort_model.onnx_filepath.stem}_lm_head_weight_rank_{tensor_model_parallel_rank}.pt'
+        lmhead_bias_path = Path(self.ort_model.onnx_filepath).parent / \
+            f'{self.ort_model.onnx_filepath.stem}_lm_head_bias_rank_{tensor_model_parallel_rank}.pt'
         torch_module = self.torch_module
 
         def retrieve_model(torch_module):
@@ -73,8 +76,10 @@ class ORTBackend(nn.Module):
 
         if self.ort_model.enable_ort and not self.ort_model.do_export:
             lm_head_weight = torch.load(lmhead_weight_path)
+            lm_head_bias = torch.load(lmhead_bias_path) if lmhead_bias_path.exists() else None
             if self.lm_head_weight is None:
                 self.lm_head_weight = lm_head_weight
+                self.lm_head_bias = lm_head_bias
             else:
                 self.lm_head_weight.data = lm_head_weight.data
             ret = None
@@ -85,5 +90,7 @@ class ORTBackend(nn.Module):
             self.ort_model.set_model(retrieve_model(torch_module)[1], model_name_or_path)
             if hasattr(torch_module, 'lm_head'):
                 torch.save(torch_module.lm_head.weight.data, lmhead_weight_path)
+                if torch_module.lm_head.bias is not None:
+                    torch.save(torch_module.lm_head.bias.data, lmhead_bias_path)
             else:
                 torch.save(torch_module.lm_head_weight.data, lmhead_weight_path)

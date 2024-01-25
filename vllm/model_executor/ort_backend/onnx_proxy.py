@@ -191,10 +191,16 @@ class AutoONNXForCausalLM:
             _export_onnx(input_ids, positions, input_metadata, kv_caches, )
         torch_module.sampler = sampler
         if hasattr(torch_module, 'lm_head_weight'):
-            lm_head_weight = torch_module.lm_head_weight
+            lm_head_weight = torch_module.lm_head_weight.required_grad_(False)
+            lm_head_bias = None
         else:
             lm_head_weight = torch_module.lm_head.weight
+            lm_head_bias = torch_module.lm_head.bias
+            lm_head_weight.requires_grad = False
+            if lm_head_bias is not None:
+                lm_head_bias.requires_grad = False
         ort_backend.lm_head_weight = lm_head_weight.to(input_ids.device)
+        ort_backend.lm_head_bias = lm_head_bias.to(input_ids.device) if lm_head_bias is not None else None
         ort_backend.torch_module = None
 
     def forward(
@@ -206,9 +212,10 @@ class AutoONNXForCausalLM:
     ) -> SamplerOutput:
         assert self.ort_session.get_inputs()[0].type == 'tensor(int64)' and input_ids.is_contiguous() and positions.is_contiguous()
 
-        Y_shape = (*input_ids.shape, self.config.hidden_size)
-        if self.ort_hidden_states is None:
-            self.ort_hidden_states = torch.empty(Y_shape, dtype=torch.float16, device=input_ids.device).contiguous()
+        Y_shape = torch.Size((*input_ids.shape, self.config.hidden_size))
+        if self.ort_hidden_states is None or self.ort_hidden_states.numel() > Y_shape.numel():
+            self.ort_hidden_states = torch.empty((torch.prod(torch.tensor(
+                Y_shape)),), dtype=torch.float16, device=input_ids.device).contiguous()
 
         self.ort_binding.bind_input(
             name='input_ids',
@@ -259,7 +266,7 @@ class AutoONNXForCausalLM:
                     shape=tuple(v_tensor.shape),
                     buffer_ptr=v_tensor.data_ptr(),
                 )
-            self.has_bind_cache_kv = kv_caches[0][0] != None
+            self.has_bind_cache_kv = kv_caches[0][0] is not None
 
         self.ort_binding.bind_output(
             name='last_hidden_state',
@@ -270,4 +277,4 @@ class AutoONNXForCausalLM:
             buffer_ptr=self.ort_hidden_states.data_ptr(),
         )
         self.ort_session.run_with_iobinding(self.ort_binding, run_options=self.run_options)
-        return self.ort_hidden_states[:input_ids.numel()]
+        return self.ort_hidden_states[:Y_shape.numel()].view(Y_shape)

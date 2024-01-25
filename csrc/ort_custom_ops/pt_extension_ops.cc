@@ -3,8 +3,6 @@
 #include "pt_extension_ops.h"
 #include "extra_ort_headers/cuda_context.h"
 #include "external_torch_func_declare.h"
-#include "raw_tensor.h"
-#include "cuda_ops.h"
 #include "pt_to_ort_resource.h"
 #include "utils.h"
 
@@ -133,6 +131,21 @@ void TorchExtensionKernel::Compute(OrtKernelContext *context) {
                          .device(torch::kCUDA, device_id)
                          .dtype(PTTypeInfo<T>::type));
     silu_and_mul(output_torch, input_torch_tensors[0]);
+  } else if (ext_param_.func_name == "gelu_new" ||
+             ext_param_.func_name == "gelu_fast") {
+    auto output_shape = input_torch_tensors[0].sizes().vec();
+    auto output_tensor = ctx.GetOutput(0, output_shape);
+    auto output_torch =
+        torch::from_blob((output_tensor.GetTensorMutableData<T>()),
+                         output_tensor.GetTensorTypeAndShapeInfo().GetShape(),
+                         torch::TensorOptions()
+                             .device(torch::kCUDA, device_id)
+                             .dtype(PTTypeInfo<T>::type));
+    if (ext_param_.func_name == "gelu_new"){
+      gelu_new(output_torch, input_torch_tensors[0]);
+    }else{
+      gelu_fast(output_torch, input_torch_tensors[0]);
+    }
   } else if (ext_param_.func_name == "rms_norm") {
     const float epsilon = std::stof(ext_param_.attr_dict_[("variance_epsilon")]);
     auto output_shape = input_torch_tensors[0].sizes().vec();
@@ -183,11 +196,11 @@ void TorchExtensionKernel::Compute(OrtKernelContext *context) {
                          torch::TensorOptions()
                              .device(torch::kCUDA, device_id)
                              .dtype(PTTypeInfo<T>::type));
-    auto a = c10::make_optional(output_query_torch);
-    auto b = c10::make_optional(output_key_torch);
     rotary_embedding(input_torch_tensors[0], input_torch_tensors[1],
                      input_torch_tensors[2], head_size, input_torch_tensors[3],
-                     is_neox, a, b);
+                     is_neox);
+    output_query_torch.copy_(input_torch_tensors[1]);
+    output_key_torch.copy_(input_torch_tensors[2]);
   } else if (ext_param_.func_name == "debug_step") {
     auto output_shape = input_torch_tensors[0].sizes().vec();
     auto output_tensor = ctx.GetOutput(0, output_shape);

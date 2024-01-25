@@ -10,8 +10,8 @@
 #include <mutex>
 #include <system_error>
 
-#include "cuda_ops.h"
-
+#include "paged_attn_ops.h"
+#include "pt_extension_ops.h"
 
 static const char* c_OpDomain = "vllm.ort.ext";
 
@@ -20,6 +20,15 @@ static const char* c_OpDomain = "vllm.ort.ext";
 #define ORT_RETHROW throw;
 #define ORT_HANDLE_EXCEPTION(func) func()
 
+namespace Cuda {
+void RegisterOps(Ort::CustomOpDomain &domain) {
+  static const PagedAttentionOp pageattn;
+  static const TorchExtensionOp ptext;
+  domain.Add(&pageattn);
+  domain.Add(&ptext);
+}
+
+} // namespace Cuda
 
 static void AddOrtCustomOpDomainToContainer(Ort::CustomOpDomain&& domain) {
   static std::vector<Ort::CustomOpDomain> ort_custom_op_domain_container;

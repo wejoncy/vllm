@@ -66,8 +66,8 @@ def get_model(model_config: ModelConfig,
         # The weights will be initialized as empty tensors.
         with torch.device("cuda"):
             if getattr(model_class, "supports_lora", False):
-                model = model_class(model_config.hf_config, linear_method,
-                                    lora_config)
+                model_create_func = partial(
+                    model_class, model_config.hf_config, linear_method, lora_config)
             elif lora_config:
                 raise ValueError(
                     f"Model {model_class.__name__} does not support LoRA, "
@@ -76,12 +76,12 @@ def get_model(model_config: ModelConfig,
                     "please open an issue on github.")
             else:
                 model_create_func = partial(model_class, model_config.hf_config, linear_method)
-                if model_config.backend == "torch":
-                    model = model_create_func()
-                elif model_config.backend == "ort":
-                    model = ORTBackend(model_create_func, model_config.hf_config, linear_method)
-                else:
-                    raise ValueError(f"Unsupported backend: {model_config.backend}")
+            if model_config.backend == "torch":
+                model = model_create_func()
+            elif model_config.backend == "ort":
+                model = ORTBackend(model_create_func, model_config.hf_config, linear_method)
+            else:
+                raise ValueError(f"Unsupported backend: {model_config.backend}")
         if model_config.load_format == "dummy":
             # NOTE(woosuk): For accurate performance evaluation, we assign
             # random values to the weights.

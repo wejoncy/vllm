@@ -51,9 +51,7 @@ void rotary_embedding(
   torch::Tensor& key,
   int head_size,
   torch::Tensor& cos_sin_cache,
-  bool is_neox,
-  c10::optional<torch::Tensor>& out_query,
-  c10::optional<torch::Tensor>& out_key);
+  bool is_neox);
 
 void silu_and_mul(
   torch::Tensor& out,

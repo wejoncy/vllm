@@ -171,7 +171,7 @@ class RotaryEmbedding(nn.Module):
         # ops.rotary_embedding() is an in-place operation that
         # updates the query and key tensors.
         ops.rotary_embedding(positions, query, key, self.head_size,
-                             self.cos_sin_cache, self.is_neox_style, None, None)
+                             self.cos_sin_cache, self.is_neox_style)
         return query, key
 
 

@@ -4,10 +4,8 @@
 #include "paged_attn_ops.h"
 
 #include "extra_ort_headers/cuda_context.h"
-#include "cuda_ops.h"
 #include "external_torch_func_declare.h"
 #include "pt_to_ort_resource.h"
-#include "raw_tensor.h"
 #include "utils.h"
 
 using namespace Ort::Custom;
@@ -40,14 +38,6 @@ void PagedAttentionOpCompute(
   auto value_view =
       value_torch.view({-1, attn_param_.num_kv_heads_, attn_param_.head_size_});
   auto output_view = output_torch.view({-1, attn_param_.num_heads_, attn_param_.head_size_});
-
-  // if (input_metadata->cache_events.events[0]) {
-  //   (cudaStreamWaitEvent(input_metadata->cache_stream,
-  //                        input_metadata->cache_events.events[0]));
-  //   std::copy(input_metadata->cache_events.events + 1,
-  //             input_metadata->cache_events.events + 80,
-  //             input_metadata->cache_events.events);
-  // }
 
   input_metadata = input_metadata ? input_metadata : GetInputMetadataFromPyObj();
 
@@ -96,8 +86,7 @@ void PagedAttentionOpCompute(
                      0.0f, attn_param_.scale_, false, true, -1,
                      -1, false, c10::nullopt);
     } else {
-      c10::OperatorName full_name(
-          "xformers::efficient_attention_forward_cutlass", "");
+      c10::OperatorName full_name("xformers::efficient_attention_forward_cutlass", "");
       auto op = torch::jit::findOperatorFor(full_name);
       TORCH_INTERNAL_ASSERT(op);
 
@@ -106,7 +95,7 @@ void PagedAttentionOpCompute(
         key_view = key_view.unsqueeze(1).expand({-1, group_size, -1, -1}).reshape(query_view.sizes());
         value_view = value_view.unsqueeze(1).expand({-1, group_size, -1, -1}).reshape(query_view.sizes());
       }
-
+    
       torch::jit::Stack stack;
       torch::jit::push(stack, query_view.unsqueeze(0));
       torch::jit::push(stack, key_view.unsqueeze(0));
@@ -218,11 +207,9 @@ KernelPagedAttentionOp::KernelPagedAttentionOp(const OrtApi &api,
   attn_param_.head_size_ = static_cast<int32_t>(head_size);
 
   attn_param_.num_kv_heads_ = static_cast<int32_t>(num_kv_heads);
-  attn_param_.num_queries_per_kv_ =
-      attn_param_.num_heads_ / attn_param_.num_kv_heads_;
+  attn_param_.num_queries_per_kv_ = attn_param_.num_heads_ / attn_param_.num_kv_heads_;
 
-  torch::Tensor head_mapping_host =
-      torch::empty({attn_param_.num_heads_}, torch::kInt32);
+  torch::Tensor head_mapping_host = torch::empty({attn_param_.num_heads_}, torch::kInt32);
 
   auto *head_mapping_host_ptr = head_mapping_host.data_ptr<int32_t>();
   for (int i = 0; i < attn_param_.num_kv_heads_; i++) {

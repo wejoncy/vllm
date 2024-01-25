@@ -76,7 +76,7 @@ def ConvertInputMetadataToC(input_metadata:InputMetadata = None,
                 pt_attn_bias = pt_attn_bias.make_local_attention(sliding_window)
             input_metadata.attn_bias = pt_attn_bias
         else:
-            input_metadata.attn_bias = _make_alibi_bias(alibi_slopes, batch_size, seq_len, query.dtype)
+            input_metadata.attn_bias = _make_alibi_bias(alibi_slopes, batch_size, seq_len, torch.half)#TODO dtype
 
 
         attn_bias.attn_name = input_metadata.attn_bias.__class__.__name__.encode('utf-8')
@@ -105,12 +105,12 @@ def ConvertInputMetadataToC(input_metadata:InputMetadata = None,
 
 
     input_metadata_c.schedule_type = 0 # 0: vllm. 1:sarathi, 2:custom, 3:self-build
-    if input_metadata.block_tables is not None:
+    if input_metadata.block_tables is not None and input_metadata.block_tables.numel() > 0:
         input_metadata_c.block_tables = input_metadata.block_tables.data_ptr()
         input_metadata_c.context_lens = input_metadata.context_lens.data_ptr()
         input_metadata_c.block_tables_size_1 = input_metadata.block_tables.shape[-1]
         input_metadata_c.context_lens_size_1 = input_metadata.context_lens.shape[-1]
-        input_metadata_c.max_context_len = input_metadata.max_context_len
+        input_metadata_c.max_context_len = input_metadata.max_context_len or 0
         
     input_metadata_c.is_prompt = input_metadata.is_prompt
     input_metadata_c.slot_mapping = input_metadata.slot_mapping.data_ptr()

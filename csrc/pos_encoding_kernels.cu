@@ -9,8 +9,7 @@ namespace vllm {
 
 template<typename scalar_t, bool IS_NEOX>
 inline __device__ void apply_rotary_embedding(
-  scalar_t* __restrict__ out_arr,
-  const scalar_t* __restrict__ arr,
+  scalar_t* __restrict__ arr,
   const scalar_t* __restrict__ cos_ptr,
   const scalar_t* __restrict__ sin_ptr,
   int rot_offset,
@@ -34,14 +33,12 @@ inline __device__ void apply_rotary_embedding(
 
   const scalar_t x = arr[x_index];
   const scalar_t y = arr[y_index];
-  out_arr[x_index] = x * cos - y * sin;
-  out_arr[y_index] = y * cos + x * sin;
+  arr[x_index] = x * cos - y * sin;
+  arr[y_index] = y * cos + x * sin;
 }
 
 template<typename scalar_t, bool IS_NEOX>
 __global__ void rotary_embedding_kernel(
-  scalar_t* __restrict__ out_query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
-  scalar_t* __restrict__ out_key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   scalar_t* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   scalar_t* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -66,7 +63,7 @@ __global__ void rotary_embedding_kernel(
     const int head_idx = i / embed_dim;
     const int64_t token_head = token_idx * query_stride + head_idx * head_size;
     const int rot_offset = i % embed_dim;
-    apply_rotary_embedding<scalar_t, IS_NEOX>(out_query + token_head, query + token_head, cos_ptr,
+    apply_rotary_embedding<scalar_t, IS_NEOX>(query + token_head, cos_ptr,
                                               sin_ptr, rot_offset, embed_dim);
   }
 
@@ -75,7 +72,7 @@ __global__ void rotary_embedding_kernel(
     const int head_idx = i / embed_dim;
     const int64_t token_head = token_idx * key_stride + head_idx * head_size;
     const int rot_offset = i % embed_dim;
-    apply_rotary_embedding<scalar_t, IS_NEOX>(out_key + token_head,key + token_head, cos_ptr,
+    apply_rotary_embedding<scalar_t, IS_NEOX>(key + token_head, cos_ptr,
                                               sin_ptr, rot_offset, embed_dim);
   }
 }
@@ -88,10 +85,7 @@ void rotary_embedding(
   torch::Tensor& key,               // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
   int head_size,
   torch::Tensor& cos_sin_cache,     // [max_position, rot_dim]
-  bool is_neox,
-  c10::optional<torch::Tensor>& out_query,             // [batch_size, seq_len, num_heads * head_size] or [num_tokens, num_heads * head_size]
-  c10::optional<torch::Tensor>& out_key               // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
-  ) {
+  bool is_neox) {
   int64_t num_tokens = query.numel() / query.size(-1);
   int rot_dim = cos_sin_cache.size(1);
   int num_heads = query.size(-1) / head_size;
@@ -99,10 +93,6 @@ void rotary_embedding(
   int64_t query_stride = query.stride(-2);
   int64_t key_stride = key.stride(-2);
 
-  if (!out_query.has_value()) {
-    out_query = query;
-    out_key = key;
-  }
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * rot_dim / 2, 512));
   const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
@@ -113,8 +103,6 @@ void rotary_embedding(
     [&] {
       if (is_neox) {
         vllm::rotary_embedding_kernel<scalar_t, true><<<grid, block, 0, stream>>>(
-          out_query.value().data_ptr<scalar_t>(),
-          out_key.value().data_ptr<scalar_t>(),
           positions.data_ptr<int64_t>(),
           query.data_ptr<scalar_t>(),
           key.data_ptr<scalar_t>(),
@@ -127,8 +115,6 @@ void rotary_embedding(
           head_size);
       } else {
         vllm::rotary_embedding_kernel<scalar_t, false><<<grid, block, 0, stream>>>(
-          out_query.value().data_ptr<scalar_t>(),
-          out_key.value().data_ptr<scalar_t>(),
           positions.data_ptr<int64_t>(),
           query.data_ptr<scalar_t>(),
           key.data_ptr<scalar_t>(),
