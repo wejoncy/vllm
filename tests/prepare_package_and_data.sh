@@ -49,11 +49,11 @@ cd onnxruntime
 bash build.sh --cmake_generator "Ninja" --config Release --cmake_extra_defines CMAKE_EXPORT_COMPILE_COMMANDS=ON --skip_tests  --build_wheel --use_cuda  --cudnn_home /usr/lib/x86_64-linux-gnu  --cuda_home /usr/local/cuda  --cmake_extra_defines CMAKE_CUDA_ARCHITECTURES="80" --enable_nccl  --disable_types  float8
 
 pip uninstall xformers onnxruntime-training -y
-pip install build/Linux/Release/dist/onnxruntime_gpu-1.17.0-cp38-cp38-linux_x86_64.whl
+pip install build/Linux/Release/dist/onnxruntime_gpu-*.whl
 cd  /home/aiscuser/work/xformers
 python setup.py develop
 
 curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
-sudo apt-get install git-lfs
-sudo apt install netcat bc lrzsz
+sudo apt-get install git-lfs -y
+sudo apt install netcat bc lrzsz -y
 wait
