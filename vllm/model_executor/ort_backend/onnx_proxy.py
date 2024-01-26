@@ -213,7 +213,7 @@ class AutoONNXForCausalLM:
         assert self.ort_session.get_inputs()[0].type == 'tensor(int64)' and input_ids.is_contiguous() and positions.is_contiguous()
 
         Y_shape = torch.Size((*input_ids.shape, self.config.hidden_size))
-        if self.ort_hidden_states is None or self.ort_hidden_states.numel() > Y_shape.numel():
+        if self.ort_hidden_states is None or self.ort_hidden_states.numel() < Y_shape.numel():
             self.ort_hidden_states = torch.empty((torch.prod(torch.tensor(
                 Y_shape)),), dtype=torch.float16, device=input_ids.device).contiguous()
 
