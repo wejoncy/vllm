@@ -9,7 +9,13 @@
 //#include <cuda.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+
+#ifndef USE_ROCM
 #include <cudnn.h>
+#else
+#include <miopen/miopen.h>
+typedef miopenHandle_t cudnnHandle_t;
+#endif
 
 namespace Ort {
 

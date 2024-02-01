@@ -83,8 +83,13 @@ class AutoONNXForCausalLM:
             torch.cuda.empty_cache()
             session_options = onnxruntime.SessionOptions()
             session_options.register_custom_ops_library(_C.__file__)
+            # Check whether GPU (NVIDIA/AMD) is available
+            ep = "CUDAExecutionProvider"
+            if torch.version.hip is not None:
+                ep = "ROCMExecutionProvider"
+
             self.ort_session = onnxruntime.InferenceSession(
-                self.onnx_filepath, providers=[('CUDAExecutionProvider', provider_opt)], sess_options=session_options)
+                self.onnx_filepath, providers=[(ep, provider_opt)], sess_options=session_options)
             self.ort_binding = self.ort_session.io_binding()
             self.has_position_ids_inputs = "position_ids" in [i.name for i in self.ort_session.get_inputs()]
             self.run_options = onnxruntime.RunOptions()
