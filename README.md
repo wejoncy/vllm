@@ -94,6 +94,50 @@ Visit our [documentation](https://vllm.readthedocs.io/en/latest/) to get started
 - [Quickstart](https://vllm.readthedocs.io/en/latest/getting_started/quickstart.html)
 - [Supported Models](https://vllm.readthedocs.io/en/latest/models/supported_models.html)
 
+### Build from source AMD rocm
+#### Install flash attention from source
+```
+git clone --recursive https://github.com/ROCmSoftwarePlatform/flash-attention.git
+cd flash-attention
+python setup.py install
+```
+
+Apply patch to torch for building composable kernel
+
+If you are using rocm5.7 with pytorch 2.1.0 onwards, you don't need to apply this patch
+
+```
+PYTHON_SITE_PACKAGES=$(python -c 'import site; print(site.getsitepackages()[0])')
+echo "Patching ${PYTHON_SITE_PACKAGES}/torch/utils/hipify/hipify_python.py"
+patch "${PYTHON_SITE_PACKAGES}/torch/utils/hipify/hipify_python.py" hipify_patch.patch
+```
+
+#### Check and install triton
+
+If you are using ptca docker image, and there's no triton installed, you need to uninstall pytorch-triton-rocm, and install triton
+```
+pip uninstall pytorch-triton-rocm
+
+git clone https://github.com/ROCm/triton.git
+cd triton/python
+python setup.py install
+```
+
+#### Install xformers without dependency, and apply patch
+```
+pip install xformers==0.0.23 --no-deps
+cd vllm
+bash patch_xformers.rocm.sh
+```
+
+#### Install vllm
+```
+cd vllm
+pip install -U -r requirements-rocm.txt
+python setup.py install
+```
+
+
 ## Contributing
 
 We welcome and value any contributions and collaborations.

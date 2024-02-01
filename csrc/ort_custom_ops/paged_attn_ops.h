@@ -44,7 +44,11 @@ struct PagedAttentionOp
   };
   const char *GetName() const { return "PagedAttention"; };
   const char *GetExecutionProviderType() const {
+  #ifndef USE_ROCM
     return "CUDAExecutionProvider";
+  #else
+    return "ROCMExecutionProvider";
+  #endif
   };
   size_t GetInputTypeCount() const { return 6; };
   ONNXTensorElementDataType GetInputType(size_t index) const {

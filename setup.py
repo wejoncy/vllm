@@ -1,5 +1,4 @@
 import contextlib
-from xformers import _C_flashattention
 import io
 import os
 import re
@@ -325,24 +324,36 @@ def download_onnxruntime_headers(version="1.16.3"):
 _build_ort_backend = True
 extra_link_args = []
 include_dirs = []
+extra_compile_args = {
+    "cxx": CXX_FLAGS,
+    "nvcc": NVCC_FLAGS,
+}
 if _build_ort_backend:
     import glob
     import shutil
+    if _is_hip():
+        from flash_attn.flash_attn_interface import flash_attn_cuda as _C_flashattention
+        base_dir, base_name = os.path.split(_C_flashattention.__file__)
+        rpath = base_dir.split('/')[-1]
+        # put onnxruntime headers into extra_link_args to avoid hipify these files
+        extra_compile_args["cxx"].append("-I" + download_onnxruntime_headers())
+    else:
+        from xformers import _C_flashattention
+        rpath = "xformers"
+        include_dirs.append(download_onnxruntime_headers())
+
     shutil.copy2(_C_flashattention.__file__, "./")
     vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
     base_dir, base_name = os.path.split(_C_flashattention.__file__)
     extra_link_args.extend(
-        [base_name, "-Wl,-rpath=$ORIGIN/../../xformers:$ORIGIN/../:$ORIGIN/../xformers"])
-    include_dirs.append(download_onnxruntime_headers())
+        [base_name, f"-Wl,-rpath=$ORIGIN/../../{rpath}:$ORIGIN/../:$ORIGIN/../{rpath}"])
 
+# put external headers into extra_link_args
 if not _is_neuron():
     vllm_extension = CUDAExtension(
         name="vllm._C",
         sources=vllm_extension_sources,
-        extra_compile_args={
-            "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
-        },
+        extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
         include_dirs=include_dirs,
     )
