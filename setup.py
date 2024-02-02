@@ -334,19 +334,19 @@ if _build_ort_backend:
     if _is_hip():
         from flash_attn.flash_attn_interface import flash_attn_cuda as _C_flashattention
         base_dir, base_name = os.path.split(_C_flashattention.__file__)
-        rpath=base_dir
+        rpath = base_dir.split('/')[-1]
         # put onnxruntime headers into extra_link_args to avoid hipify these files
         extra_compile_args["cxx"].append("-I" + download_onnxruntime_headers())
     else:
         from xformers import _C_flashattention
-        rpath = "$ORIGIN/../../xformers:$ORIGIN/../:$ORIGIN/../xformers"
+        rpath = "xformers"
         include_dirs.append(download_onnxruntime_headers())
 
     shutil.copy2(_C_flashattention.__file__, "./")
     vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
     base_dir, base_name = os.path.split(_C_flashattention.__file__)
     extra_link_args.extend(
-        [base_name, f"-Wl,-rpath={rpath}"])
+        [base_name, f"-Wl,-rpath=$ORIGIN/../../{rpath}:$ORIGIN/../:$ORIGIN/../{rpath}"])
 
 # put external headers into extra_link_args
 if not _is_neuron():
