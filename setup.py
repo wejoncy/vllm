@@ -12,7 +12,6 @@ import setuptools
 import torch
 import torch.utils.cpp_extension as torch_cpp_ext
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
-
 ROOT_DIR = os.path.dirname(__file__)
 
 MAIN_CUDA_VERSION = "12.1"
@@ -317,15 +316,58 @@ if _is_cuda():
     vllm_extension_sources.append("csrc/quantization/awq/gemm_kernels.cu")
     vllm_extension_sources.append("csrc/custom_all_reduce.cu")
 
+def download_onnxruntime_headers(version="1.16.3"):
+    from pathlib import Path
+    import urllib
+    import tarfile
+    url = f"https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-linux-x64-gpu-{version}.tgz"
+    fname = Path(f"build/onnxruntime-headers-{version}.tgz").resolve()
+    if not Path(str(fname)[:-4]).exists():
+        if not fname.exists():
+            fname.parent.mkdir(exist_ok=True)
+            print("downloading onnxruntime c++ headers from ", url)
+            urllib.request.urlretrieve(url, fname)
+        with tarfile.open(fname) as tar:
+            tar.extractall(path=fname._str[:-4])
+    return os.path.join(fname._str[:-4], os.listdir(fname._str[:-4])[0], 'include')
+
+
+_build_ort_backend = True
+extra_link_args = []
+include_dirs = []
+extra_compile_args = {
+    "cxx": CXX_FLAGS,
+    "nvcc": NVCC_FLAGS,
+}
+if _build_ort_backend:
+    import glob
+    import shutil
+    if _is_hip():
+        from flash_attn.flash_attn_interface import flash_attn_cuda as _C_flashattention
+        base_dir, base_name = os.path.split(_C_flashattention.__file__)
+        rpath = base_dir.split('/')[-1]
+        # put onnxruntime headers into extra_link_args to avoid hipify these files
+        extra_compile_args["cxx"].append("-I" + download_onnxruntime_headers())
+    else:
+        from xformers import _C_flashattention
+        rpath = "xformers"
+        include_dirs.append(download_onnxruntime_headers())
+
+    shutil.copy2(_C_flashattention.__file__, "./")
+    vllm_extension_sources.extend(glob.glob('csrc/ort_custom_ops/*.cc'))
+    base_dir, base_name = os.path.split(_C_flashattention.__file__)
+    extra_link_args.extend(
+        [base_name, f"-Wl,-rpath=$ORIGIN/../../{rpath}:$ORIGIN/../:$ORIGIN/../{rpath}"])
+
+# put external headers into extra_link_args
 if not _is_neuron():
     vllm_extension = CUDAExtension(
         name="vllm._C",
         sources=vllm_extension_sources,
-        extra_compile_args={
-            "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
-        },
         libraries=["cuda"] if _is_cuda() else [],
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+        include_dirs=include_dirs,
     )
     ext_modules.append(vllm_extension)
 

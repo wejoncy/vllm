@@ -44,6 +44,7 @@ class EngineArgs:
     lora_dtype = 'auto'
     max_cpu_loras: Optional[int] = None
     device: str = 'cuda'
+    backend: str = "torch"
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -264,6 +265,11 @@ class EngineArgs:
             choices=["cuda"],
             help=('Device type for vLLM execution. '
                   'Currently, only CUDA-compatible devices are supported.'))
+        parser.add_argument('--backend',
+                            type=str,
+                            default=EngineArgs.backend,
+                            choices=["torch", "ort"],
+                            help='the accerlated backend to use. ')
         return parser
 
     @classmethod
@@ -285,7 +291,7 @@ class EngineArgs:
                                    self.dtype, self.seed, self.revision,
                                    self.tokenizer_revision, self.max_model_len,
                                    self.quantization, self.enforce_eager,
-                                   self.max_context_len_to_capture)
+                                   self.max_context_len_to_capture, self.backend)
         cache_config = CacheConfig(self.block_size,
                                    self.gpu_memory_utilization,
                                    self.swap_space, self.kv_cache_dtype,

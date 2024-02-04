@@ -122,6 +122,7 @@ def get_max_shared_memory_bytes(gpu: int = 0) -> int:
     """Returns the maximum shared memory per thread block in bytes."""
     # NOTE: This import statement should be executed lazily since
     # the Neuron-X backend does not have the `cuda_utils` module.
+    import xformers  # vllm._C depends on xformers
     from vllm._C import cuda_utils
 
     max_shared_mem = cuda_utils.get_max_shared_memory_per_block_device_attribute(

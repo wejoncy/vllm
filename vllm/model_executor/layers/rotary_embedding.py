@@ -43,6 +43,31 @@ def _rotate_gptj(x: torch.Tensor) -> torch.Tensor:
     return x.flatten(-2)
 
 
+def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
+    x1 = x[..., :x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def _rotate_gptj(x: torch.Tensor) -> torch.Tensor:
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+    x = torch.stack((-x2, x1), dim=-1)
+    return x.flatten(-2)
+
+
+class ONNXRotaryEmbedding(torch.autograd.Function):
+    @staticmethod
+    def symbolic(graph, positions, query, key, head_size:int, cos_sin_cache, is_neox_style:bool):
+        extra_attributes = f"head_size={head_size}\nis_neox_style={int(is_neox_style)}"
+        return graph.op("vllm.ort.ext::TorchExtension", positions, query, key, cos_sin_cache, outputs=2,
+                        num_inputs_i=4, num_outputs_i=2, func_name_s="rotary_embedding", 
+                        extra_attributes_s=extra_attributes)
+
+    @staticmethod
+    def forward(ctx, positions, query, key, head_size:int, cos_sin_cache, is_neox_style:bool) -> torch.Tensor:
+        return query, key
+
 class RotaryEmbedding(nn.Module):
     """Original rotary positional embedding."""
 
@@ -138,6 +163,8 @@ class RotaryEmbedding(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if torch.onnx.is_in_onnx_export():
+            return ONNXRotaryEmbedding.apply(positions, query, key, self.head_size, self.cos_sin_cache, self.is_neox_style)
         # ops.rotary_embedding() is an in-place operation that
         # updates the query and key tensors.
         ops.rotary_embedding(positions, query, key, self.head_size,
