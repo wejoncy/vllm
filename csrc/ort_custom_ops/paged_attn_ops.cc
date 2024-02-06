@@ -50,7 +50,7 @@ void PagedAttentionOpCompute(
             .dtype(torch::kInt64));
 
     reshape_and_cache(key_view, value_view, key_cache_torch, value_cache_torch,
-                      slot_mapping_torch);
+                      slot_mapping_torch, input_metadata->kv_cache_dtype);
     CHECK_CUDA_ERROR();
   }
 
@@ -169,7 +169,7 @@ void PagedAttentionOpCompute(
                          value_cache_torch, attn_param_.num_kv_heads_,
                          attn_param_.scale_, block_tables, context_lens,
                          value_cache_torch.size(3),
-                         input_metadata->max_context_len, c10::nullopt);
+                         input_metadata->max_context_len, c10::nullopt, input_metadata->kv_cache_dtype);
       CHECK_CUDA_ERROR();
 
     } else {
@@ -189,7 +189,8 @@ void PagedAttentionOpCompute(
                          query_view, key_cache_torch, value_cache_torch,
                          attn_param_.num_kv_heads_, attn_param_.scale_,
                          block_tables, context_lens, value_cache_torch.size(3),
-                         input_metadata->max_context_len, c10::nullopt);
+                         input_metadata->max_context_len, c10::nullopt,
+                         input_metadata->kv_cache_dtype);
       CHECK_CUDA_ERROR();
     }
   }

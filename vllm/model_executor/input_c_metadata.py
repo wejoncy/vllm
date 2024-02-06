@@ -3,7 +3,7 @@ import torch
 from xformers.ops.fmha.attn_bias import (BlockDiagonalCausalMask,
                                                 LowerTriangularMaskWithTensorBias)
 import ctypes
-from ctypes import (Structure, c_longlong, c_void_p, c_char_p, byref)
+from ctypes import (Structure, c_longlong, c_void_p, c_char_p, c_char, byref)
 
 from .layers.attention import _make_alibi_bias
 from . import InputMetadata
@@ -38,6 +38,7 @@ class C_InputMetadata(Structure):
         ("slot_mapping", c_longlong),
         ("context_lens_size_1", c_longlong),
         ("attn_bias", C_AttnBias),
+        ("kv_cache_dtype", c_char*12),
         ("cache_events", C_THEvent),
         ("cache_stream", c_void_p),
     ]
@@ -103,6 +104,7 @@ def ConvertInputMetadataToC(input_metadata:InputMetadata = None,
         attn_bias.q_seqinfo = q_seqinfo
         input_metadata_c.attn_bias = attn_bias
 
+    input_metadata_c.kv_cache_dtype = input_metadata.kv_cache_dtype.encode()
 
     input_metadata_c.schedule_type = 0 # 0: vllm. 1:sarathi, 2:custom, 3:self-build
     if input_metadata.block_tables is not None and input_metadata.block_tables.numel() > 0:

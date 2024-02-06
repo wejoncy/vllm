@@ -34,6 +34,7 @@ struct InputMetadata {
   int64_t slot_mapping;
   int64_t context_lens_size_1;
   AttnBias attn_bias;
+  char kv_cache_dtype[12];
   THEvent cache_events;
   cudaStream_t cache_stream;
 };
