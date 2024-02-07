@@ -64,17 +64,37 @@ class AutoONNXForCausalLM:
         self.do_export = True
         self.ort_hidden_states = None
         self.ort_session = None
+        self.output_name = None # for onnx model outside of vllm exporter
+        self.input_keycache_name = None
+        self.input_valuecache_name = None
         self.run_options = None
         self.has_bind_cache_kv  = False
         self.metadata_pointer_tensor = torch.empty((1), dtype=torch.int64, device='cpu')
         self.enable_ort = config.backend == 'ort'
         self.set_model(None, config.name_or_path or config.auto_map['AutoConfig'].split('--')[0])
 
+    def check_input_output(self):
+        self.output_name = self.ort_session.get_outputs()[0].name
+        if len(self.ort_session.get_outputs()) > 1:
+            assert self.output_name == "last_hidden_state"
+        all_input_names = [i.name for i in self.ort_session.get_inputs()]
+        all_input_names.remove("input_ids")
+        all_input_names.remove("position_ids")
+        if 'input_metadata' in all_input_names:
+            all_input_names.remove("input_metadata")
+        assert len(all_input_names) % 2 == 0
+        import re
+        all_input_names = list(set([re.sub(r'[0-9]+', '{idx}', i) for i in all_input_names]))
+        assert len(all_input_names) == 2
+        self.input_keycache_name, self.input_valuecache_name = (all_input_names[
+            0], all_input_names[1]) if 'key' in all_input_names[0] else (all_input_names[1],all_input_names[0])
+
     def init_ort_session(self):
         if self.enable_ort and not self.do_export and self.ort_session is None:
             os.environ['LOCAL_WORLD_SIZE'] = str(get_tensor_model_parallel_world_size())
             os.environ['LOCAL_RANK'] = str(get_tensor_model_parallel_rank())
             provider_opt = {"device_id": get_tensor_model_parallel_rank(),
+                            #"enable_cuda_graph": "true",
                             #"has_user_compute_stream" : "true",
                             #"user_compute_stream" : str(torch.cuda.current_stream().cuda_stream)
                             }
@@ -90,6 +110,8 @@ class AutoONNXForCausalLM:
 
             self.ort_session = onnxruntime.InferenceSession(
                 self.onnx_filepath, providers=[(ep, provider_opt)], sess_options=session_options)
+            self.check_input_output()
+
             self.ort_binding = self.ort_session.io_binding()
             self.has_position_ids_inputs = "position_ids" in [i.name for i in self.ort_session.get_inputs()]
             self.run_options = onnxruntime.RunOptions()
@@ -138,8 +160,8 @@ class AutoONNXForCausalLM:
                 onnx_dynamic_axes["position_ids"][0] = "batch_size"
             onnx_inp_names = ["input_ids", "position_ids"]
             for i in range(layer_num):
-                onnx_inp_names.append(f'key_cache.{i*2+1}')
-                onnx_inp_names.append(f'value_cache.{i*2+1}')
+                onnx_inp_names.append(f'key_cache.{i}')
+                onnx_inp_names.append(f'value_cache.{i}')
                 onnx_dynamic_axes[onnx_inp_names[-2]] = {0: "num_blocks",
                                                          1: "num_heads", 2: "head_size_x", 3: "block_size", 4: "x"}
                 onnx_dynamic_axes[onnx_inp_names[-1]] = {0: "num_blocks",
@@ -256,7 +278,7 @@ class AutoONNXForCausalLM:
                 k_tensor = kv_caches[i][0] if kv_caches[i][0] is not None else self.none_tensor_k
                 v_tensor = kv_caches[i][1] if kv_caches[i][0] is not None else self.none_tensor_v
                 self.ort_binding.bind_input(
-                    name=f'key_cache.{i*2+1}',
+                    name=self.input_keycache_name.format(idx=i),
                     device_type=k_tensor.device.type,
                     device_id=k_tensor.device.index,
                     element_type=kv_cache_dtype,
@@ -264,7 +286,7 @@ class AutoONNXForCausalLM:
                     buffer_ptr=k_tensor.data_ptr(),
                 )
                 self.ort_binding.bind_input(
-                    name=f'value_cache.{i*2+1}',
+                    name=self.input_valuecache_name.format(idx=i),
                     device_type=v_tensor.device.type,
                     device_id=v_tensor.device.index,
                     element_type=kv_cache_dtype,
@@ -274,7 +296,7 @@ class AutoONNXForCausalLM:
             self.has_bind_cache_kv = kv_caches[0][0] is not None
 
         self.ort_binding.bind_output(
-            name='last_hidden_state',
+            name=self.output_name,
             device_type=self.ort_hidden_states.device.type,
             device_id=self.ort_hidden_states.device.index,
             element_type=np.float16,
