@@ -25,7 +25,7 @@
   #include <cuda_bf16.h>
   #include <cuda_fp16.h>
 #else
-  #include <hip/hip_bf16.h>
+  #include <hip/hip_bfloat16.h>
   #include <hip/hip_fp16.h>
 
   typedef __hip_bfloat162 __nv_bfloat162;
