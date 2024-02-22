@@ -94,10 +94,12 @@ class AutoONNXForCausalLM:
             os.environ['LOCAL_WORLD_SIZE'] = str(get_tensor_model_parallel_world_size())
             os.environ['LOCAL_RANK'] = str(get_tensor_model_parallel_rank())
             provider_opt = {"device_id": get_tensor_model_parallel_rank(),
-                            #"enable_cuda_graph": "true",
-                            #"has_user_compute_stream" : "true",
-                            #"user_compute_stream" : str(torch.cuda.current_stream().cuda_stream)
                             }
+            if not self.config.enforce_eager:
+                # provider_opt["enable_cuda_graph"] = "true"
+                provider_opt["has_user_compute_stream"] = "true"
+                provider_opt["user_compute_stream"] = str(torch.cuda.current_stream().cuda_stream)
+
             self.model and self.model.to('cpu')
             self.model = None
             torch.cuda.empty_cache()

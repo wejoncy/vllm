@@ -81,6 +81,9 @@ class Worker:
             os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
             self.device = torch.device(f"cuda:{self.local_rank}")
             torch.cuda.set_device(self.device)
+            # set a new stream to avoid use stream 0
+            # becaues stream 0 can't be used by ORT set_cuda_stream
+            torch.cuda.set_stream(torch.cuda.Stream())
 
             _check_if_gpu_supports_dtype(self.model_config.dtype)
         else:
