@@ -88,9 +88,6 @@ class ModelConfig:
         self.tokenizer_revision = tokenizer_revision
         self.quantization = quantization
         self.enforce_eager = enforce_eager
-        if backend == "ort":
-            logger.warning("enforce_eager is set to True for ort backend")
-            self.enforce_eager = True
         self.max_context_len_to_capture = max_context_len_to_capture
 
         if os.environ.get("VLLM_USE_MODELSCOPE", "False").lower() == "true":

@@ -25,7 +25,10 @@ _PAD_SLOT_ID = -1
 LORA_WARMUP_RANK = 8
 # Capture graphs for batch size 1, 2, 4, 8, 16, 24, 32, 40, ..., 256.
 # NOTE: _get_graph_batch_size needs to be updated if this list is changed.
-_BATCH_SIZES_TO_CAPTURE = [1, 2, 4] + [8 * i for i in range(1, 33)]
+num_graphs = 24
+# change num_graphs from 33 to 24, because of OOM when num_graphs >= 30
+# TODO: need to check the reason
+_BATCH_SIZES_TO_CAPTURE = [1, 2, 4] + [8 * i for i in range(1, num_graphs)]
 
 
 class ModelRunner:
@@ -744,7 +747,7 @@ class CUDAGraphRunner:
 
         # Capture the graph.
         self.graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.graph, pool=memory_pool):
+        with torch.cuda.graph(self.graph, pool=memory_pool, stream = torch.cuda.current_stream()):
             hidden_states = self.model(
                 input_ids,
                 positions,
