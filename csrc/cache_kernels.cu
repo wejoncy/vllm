@@ -14,8 +14,8 @@
 #include <vector>
 
 #ifdef USE_ROCM
-  #include <hip/hip_bf16.h>
-  typedef __hip_bfloat16 __nv_bfloat16;
+  #include <hip/hip_bfloat16.h>
+  typedef hip_bfloat16 __nv_bfloat16;
 #endif
 
 void swap_blocks(
