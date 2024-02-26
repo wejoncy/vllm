@@ -1,6 +1,7 @@
 import sys
 import os
 from typing import Dict, List, Optional, Tuple
+import json
 
 import torch
 from torch import nn
@@ -73,6 +74,15 @@ class AutoONNXForCausalLM:
         self.enable_ort = config.backend == 'ort'
         self.set_model(None, config.name_or_path or config.auto_map['AutoConfig'].split('--')[0])
 
+    def load_tuning_result(self):
+        if self.enable_ort and self.ort_session is not None:
+            tuned_result = os.getenv('ORT_TUNE_RESULT', "tuning-result.json")
+            if os.path.exists(tuned_result):
+                with open(tuned_result, 'r') as fp:
+                    res = json.load(fp)
+                    self.ort_session.set_tuning_results(res)
+                    logger.info(f'Set ort tuned result from {tuned_result} done.')
+
     def check_input_output(self):
         self.output_name = self.ort_session.get_outputs()[0].name
         if len(self.ort_session.get_outputs()) > 1:
@@ -109,6 +119,8 @@ class AutoONNXForCausalLM:
             ep = "CUDAExecutionProvider"
             if torch.version.hip is not None:
                 ep = "ROCMExecutionProvider"
+                provider_opt["tunable_op_enable"] = True
+                provider_opt["tunable_op_tuning_enable"] = False
 
             self.ort_session = onnxruntime.InferenceSession(
                 self.onnx_filepath, providers=[(ep, provider_opt)], sess_options=session_options)
@@ -118,6 +130,8 @@ class AutoONNXForCausalLM:
             self.has_position_ids_inputs = "position_ids" in [i.name for i in self.ort_session.get_inputs()]
             self.run_options = onnxruntime.RunOptions()
             self.run_options.add_run_config_entry("disable_synchronize_execution_providers", "1")
+            if torch.version.hip is not None:
+                self.load_tuning_result()
 
     def set_model(self, model: nn.Module, model_path_or_name: str):
         self.model = model
